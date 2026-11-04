@@ -101,6 +101,7 @@ desktop 1280x720 + phone 412x915), `t2_camera.py` (real tracker with fake camera
 frame-by-frame swipes, offline app files, background thread, slow GPU switch), `t2_errors.py` (camera blocked,
 no camera, offline, broken downloads, unplugged camera, app fallbacks), `t2_soak.py` (4 minutes live with camera).
 Last results on v2.0.0: round 1 = 279/279, round 2 = 292/292, emulator = 26/26.
+Tracking check (`ccf4457`): round 1 = 337/337, round 2 = 337/337, emulator = 33/33.
 
 **Android app / CI:** push to a branch `app-<name>` → GitHub Actions builds the APK and runs the emulator test
 (Android 14, WebView 113). Two APKs come out: the release APK (`io.github.kolk42254code.fruitslicer`, "Fruit Slicer";

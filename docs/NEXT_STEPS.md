@@ -26,9 +26,11 @@ Follow the rules in `CLAUDE.md`: two full test rounds before every release, and 
 
 ### A1. Build a "Tracking check" screen first (measure before fixing)
 
-> **Status (4 Nov 2026): built, test rounds in progress** (branch `claude/awesome-hawking-1jsm05`; tests:
-> `t2_camera.py r1 check,checklayout`, checks in `t2_logic.py`, and a step in `app/ci/cdp-test.mjs`). Not published yet.
-> Next: two full test rounds + CI emulator, publish, then the owner sends a report from the phone.
+> **Status (4 Nov 2026): built and tested; waiting for the owner's phone report.** Commit `ccf4457` on
+> `claude/awesome-hawking-1jsm05` and `app-tracking-check` (not on `main`, not released). Two full rounds: 337/337 each
+> (logic 192, camera 114, errors 25, soak 6). CI run 7 (Android 14 emulator): 33/33, including the check screen in the
+> app and "Copy report" in the WebView. Test APK = the debug build "Fruit Slicer TEST" (own app ID, installs next to
+> v2.0.0) from the run's `apks` artifact. Next: the owner sends reports from Chrome and the TEST app, then A2.
 > Notes for reading a report: "Swipes … hand lost X of Y frames" counts tracker results while the fingertip was fast
 > (or for 0.25 s after); "broken" = the hand came back later than `CFG.camGap` or was dropped; "Steadiness" = fingertip
 > shake while the hand is still (raw tracker point vs. smoothed cursor, in screen pixels); "jumps" = one-frame
