@@ -23,6 +23,10 @@ devtools() {
 }
 
 adb wait-for-device
+# let the freshly booted emulator settle; hide crash/"not responding" dialogs of other apps where Android allows it
+adb shell settings put global anr_show_background 0
+adb shell settings put global hide_error_dialogs 1
+sleep 20
 note "android: $(adb shell getprop ro.build.version.release | tr -d '\r')"
 note "webview: $(adb shell dumpsys package com.google.android.webview | grep -m1 versionName | tr -d ' \r')"
 

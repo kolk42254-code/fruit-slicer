@@ -81,12 +81,34 @@ async function waitFor(fn, ms, every = 500) {
   return false;
 }
 
+function uiDump() {
+  adb('shell uiautomator dump /sdcard/ui.xml');
+  return adb('shell cat /sdcard/ui.xml');
+}
+function tapBounds(n) {
+  const b = n.match(/bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"/);
+  if (!b) return false;
+  adb(`shell input tap ${Math.round((+b[1] + +b[3]) / 2)} ${Math.round((+b[2] + +b[4]) / 2)}`);
+  return true;
+}
+// The emulator is slow (software graphics), so its own launcher sometimes shows "Pixel Launcher isn't responding".
+// That system dialog would swallow our key presses and taps, so tap its "Wait" button first.
+function dismissSystemDialogs(xml) {
+  try {
+    xml = xml || uiDump();
+    if (!/isn.t responding/i.test(xml)) return false;
+    const n = (xml.match(/<node [^>]*>/g) || []).find((x) => /resource-id="android:id\/aerr_wait"/.test(x) || / text="Wait"/.test(x));
+    if (n && tapBounds(n)) { log('note: closed an emulator "isn\'t responding" dialog (not this app)'); execSync('sleep 1'); return true; }
+  } catch (err) { /* dump can fail while the screen changes */ }
+  return false;
+}
+
 // tap a native Android control (e.g. the permission dialog button) found by text or resource id
 function tapNative(re) {
   for (let i = 0; i < 15; i++) {
     try {
-      adb('shell uiautomator dump /sdcard/ui.xml');
-      const xml = adb('shell cat /sdcard/ui.xml');
+      const xml = uiDump();
+      if (dismissSystemDialogs(xml)) continue;
       for (const n of xml.match(/<node [^>]*>/g) || []) {
         const text = (n.match(/ text="([^"]*)"/) || [])[1] || '';
         const rid = (n.match(/ resource-id="([^"]*)"/) || [])[1] || '';
@@ -186,15 +208,19 @@ async function main() {
 
   // phone Back button: pause, then menu, then leave the app (camera off), then come back (camera on)
   await cdp.eval('__FS.feedOnly(false); __FS.manual(false); true');
+  if (dismissSystemDialogs()) { await sleep(1500); }
+  await cdp.eval("__FS.snap().state === 'paused' && __FS.resume(); true"); // a system dialog on top pauses the game
   adb('shell input keyevent KEYCODE_BACK');
   await sleep(1500);
   s = await cdp.eval('__FS.snap()');
   check('Back button pauses the game', s.state === 'paused', s.state);
   await cdp.shot('04_paused');
+  dismissSystemDialogs();
   adb('shell input keyevent KEYCODE_BACK');
   await sleep(1500);
   s = await cdp.eval('__FS.snap()');
   check('Back again goes to the menu', s.state === 'menu', s.state);
+  dismissSystemDialogs();
   adb('shell input keyevent KEYCODE_BACK');
   let away = null;
   for (let i = 0; i < 20; i++) { // up to 10 s
