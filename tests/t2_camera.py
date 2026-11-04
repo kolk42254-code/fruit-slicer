@@ -409,7 +409,9 @@ NOHAND_URL = pathlib.Path(VIDEOS, 'nohand_frame0.jpg').resolve().as_uri()
 SKEL_JS = """() => {  // skeleton pixels: the light-blue bone colour at the middle of 3 finger bones
   const raw = __FS.raw()[0];
   if (!raw) return null;
-  const c = document.getElementById('stage'), g = c.getContext('2d'), k = c.width / c.getBoundingClientRect().width, out = [];
+  const c = document.getElementById('stage'), k = c.width / c.getBoundingClientRect().width, out = [];
+  const copy = document.createElement('canvas'); copy.width = c.width; copy.height = c.height;   // read a copy, not the game canvas
+  const g = copy.getContext('2d', { willReadFrequently: true }); g.drawImage(c, 0, 0);
   for (const [a, b] of [[5, 6], [9, 10], [13, 14]]) {
     const A = __FS.toScreen(raw[a].x, raw[a].y), B = __FS.toScreen(raw[b].x, raw[b].y);
     const d = g.getImageData(Math.round((A.x + B.x) / 2 * k) - 2, Math.round((A.y + B.y) / 2 * k) - 2, 5, 5).data;
@@ -422,6 +424,11 @@ SKEL_JS = """() => {  // skeleton pixels: the light-blue bone colour at the midd
 APP_VERSION = json.load(open(os.path.join(ROOT, 'app', 'package.json')))['version']
 # true size of the test hand: Python MediaPipe's landmark box in front-back.jpg (make_videos.py), scaled as in the video
 HAND_PX = max(530 - 123, 656 - 66) * 260 / 690
+
+NEXT_FRAMES = 'new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(() => r(true))))'
+
+async def fresh(page):   # no hands left from the last part, numbers back to zero
+    await page.evaluate('__FS.feedOnly(true); __FS.resetDiag()')
 
 async def seq(page, items, fps=30):
     return await page.evaluate(SEQ_JS, [FR_URL, NOHAND_URL, items, fps])
@@ -474,7 +481,7 @@ async def check_case(p, R):
     await page.wait_for_function('window.__clip.text !== null', timeout=5000)
     text = await page.evaluate('window.__clip.text')
     s = await snap(page)
-    need = ('Camera: 640×480', 'Camera can: ', 'Tracker: ', 'Delay: ', 'Hands now: hand 1: size ', 'Swipes: ', 'Steadiness', 'Screen: 1280×720', 'Settings: difficulty normal')
+    need = ('Camera: 640×480', 'Camera can: ', 'Tracker: ', 'Delay (camera to result): ', 'Hands now: hand 1: size ', 'Swipes: ', 'Steadiness', 'Screen: 1280×720', 'Settings: difficulty normal')
     R.check(f'[check] Copy report: report on the clipboard with version {APP_VERSION}, camera, tracker, delay, hand, swipes, screen, settings',
             text.startswith('Fruit Slicer tracking report') and f'Version {APP_VERSION} (website)' in text and all(k in text for k in need), text[:400])
     R.check('[check] says the report was copied', 'copied' in s['ui']['checkNote'] and not s['ui']['checkText'], s['ui']['checkNote'])
@@ -492,6 +499,7 @@ async def check_case(p, R):
 
     # leaving and coming back
     await page.click('#btn-check-done')
+    await page.evaluate(NEXT_FRAMES)
     s = await snap(page)
     px = await page.evaluate(SKEL_JS)
     R.check('[check] Done: back to the menu, camera still on, no skeleton', s['state'] == 'menu' and not s['ui']['check'] and not s['ui']['checkTip'] and s['ui']['menuBar'] and s['camOn'] and px is not None and not any(px), str(px))
@@ -522,24 +530,24 @@ async def check_case(p, R):
     R.check('[check] still hand: shake measured and small (< 2 px), the cursor shakes less, no jumps, no swipes',
             all(n == 1 for n in log) and N['shakeRaw'] is not None and N['shakeRaw'] < 2 and N['shakeCursor'] <= N['shakeRaw'] and N['jumps'] == 0 and N['swipes'] == 0,
             f"shake {N['shakeRaw']} px raw, {N['shakeCursor']} px cursor, jumps {N['jumps']}, swipes {N['swipes']}, found {log}")
-    await page.evaluate('__FS.resetDiag()')
+    await fresh(page)
     log = await seq(page, frames('swipe_sharp', 10, 30))
     N = await page.evaluate('__FS.checkNumbers()')
     R.check('[check] one sharp swipe: 1 swipe, hand never lost, gap = one frame (33 ms), nothing broken',
             N['swipes'] == 1 and N['swipeFrames'] >= 8 and N['swipeLost'] == 0 and N['broken'] == 0 and 25 <= N['gapMs'] <= 45,
             f"swipes {N['swipes']}, lost {N['swipeLost']}/{N['swipeFrames']}, gap {N['gapMs']:.0f} ms, broken {N['broken']}, found {log}")
-    await page.evaluate('__FS.resetDiag()')
+    await fresh(page)
     log = await seq(page, frames('swipe_sharp', 10, 20) + [['nohand', 0]] * 2 + frames('swipe_sharp', 23, 30))
     N = await page.evaluate('__FS.checkNumbers()')
     R.check('[check] hand lost for 2 frames mid-swipe: 2 lost frames, gap 100 ms, swipe not broken',
             N['swipeLost'] == 2 and N['broken'] == 0 and 90 <= N['gapMs'] <= 110 and N['swipes'] == 1,
             f"swipes {N['swipes']}, lost {N['swipeLost']}/{N['swipeFrames']}, gap {N['gapMs']:.0f} ms, broken {N['broken']}, found {log}")
-    await page.evaluate('__FS.resetDiag()')
+    await fresh(page)
     log = await seq(page, frames('swipe_sharp', 26, 33) + frames('swipe_sharp', 44, 46) + [['nohand', 0]] * 12 + frames('swipe_sharp', 51, 51) * 6)
     N = await page.evaluate('__FS.checkNumbers()')
     R.check('[check] hand lost for 0.4 s mid-swipe: counted as a broken swipe',
             N['broken'] == 1 and N['swipeLost'] >= 5, f"swipes {N['swipes']}, lost {N['swipeLost']}/{N['swipeFrames']}, broken {N['broken']}, found {log}")
-    await page.evaluate('__FS.resetDiag()')
+    await fresh(page)
     log = await seq(page, frames('swipe_sharp', 0, 9) + [['swipe_sharp', 19]] + frames('swipe_sharp', 10, 17))
     N = await page.evaluate('__FS.checkNumbers()')
     R.check('[check] a one-frame jump of the fingertip is counted (1 jump)', N['jumps'] == 1 and all(n == 1 for n in log), f"jumps {N['jumps']}, found {log}")

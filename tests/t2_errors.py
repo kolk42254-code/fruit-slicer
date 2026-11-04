@@ -34,6 +34,45 @@ async def main():
         await wait_state(page, 'error', timeout=60000)
         s = await snap(page)
         R.check('[no camera] clear message', s['ui']['errTitle'] in ('No camera found', 'Camera did not start'), s['ui']['errTitle'])
+        await page.click('#btn-err-pointer')
+        await page.click('#btn-settings'); await page.click('#btn-check')
+        await wait_state(page, 'error', timeout=60000)
+        s = await snap(page)
+        R.check('[no camera] "Check hand tracking": Settings closes, same clear message, no check screen',
+                s['ui']['errTitle'] in ('No camera found', 'Camera did not start') and not s['ui']['settings'] and not s['ui']['check'] and not s['ui']['checkTip'], s['ui']['errTitle'])
+        await page.click('#btn-err-pointer')
+        s = await snap(page)
+        R.check('[no camera] then "Play with mouse or touch" goes back to the menu', s['state'] == 'menu' and s['inputMode'] == 'pointer' and not s['ui']['check'] and s['ui']['menuBar'])
+        await br.close()
+
+        # 2b) tracking check while the hand tracker cannot download
+        br = await launch(p, video='static_one')
+        net = Net(block_model=True)
+        ctx, page = await open_game(br, net, 1280, 720)
+        await page.click('#btn-pointer')
+        await page.click('#btn-settings'); await page.click('#btn-check')
+        await wait_state(page, 'error', timeout=90000)
+        s = await snap(page)
+        R.check('[check, offline model] "Hand tracker did not load", no check screen', s['ui']['errTitle'] == 'Hand tracker did not load' and not s['ui']['check'], s['ui']['errTitle'])
+        net.block_model = False
+        await page.click('#btn-retry')
+        await wait_state(page, 'check', timeout=180000)
+        s = await snap(page)
+        R.check('[check, offline model] "Try again" recovers and opens the tracking check', s['ui']['check'] and s['camOn'], s['state'])
+        await ctx.close()
+        # a failed check must not send a later camera start to the check screen
+        net = Net(block_model=True)
+        ctx, page = await open_game(br, net, 1280, 720)
+        await page.click('#btn-pointer')
+        await page.click('#btn-settings'); await page.click('#btn-check')
+        await wait_state(page, 'error', timeout=90000)
+        await page.click('#btn-err-pointer')
+        net.block_model = False
+        await page.click('#btn-use-camera')
+        await wait_state(page, 'menu', timeout=180000)
+        await page.wait_for_timeout(1000)
+        s = await snap(page)
+        R.check('[check, offline model] later "Use camera instead" from the menu goes to the menu as usual', s['state'] == 'menu' and s['camOn'] and not s['ui']['check'], s['state'])
         await br.close()
 
         # 3) hand model download fails, then works on "Try again"

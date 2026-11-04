@@ -100,19 +100,11 @@ async def suite(width, height, mobile, R):
         s = await snap(page)
         R.check(f'[{dev}] Escape closes Settings', not s['ui']['settings'] and s['state'] == 'menu')
 
-        # ---------------------------------------------------------------- tracking check button (this browser has no camera)
+        # ---------------------------------------------------------------- tracking check button (opening it with no camera: t2_errors.py)
         await page.click('#btn-settings')
         s = await snap(page)
         R.check(f'[{dev}] Settings from the menu has "Check hand tracking"', s['ui']['checkRow'] and await page.is_visible('#btn-check'))
-        await page.click('#btn-check')
-        await page.wait_for_function("['error', 'check'].includes(window.__FS.snap().state)", timeout=30000)
-        s = await snap(page)
-        R.check(f'[{dev}] tracking check with no camera: Settings closes, clear camera message, no check screen',
-                s['state'] == 'error' and not s['ui']['settings'] and s['ui']['errTitle'] in ('No camera found', 'Camera did not start') and not s['ui']['check'] and not s['ui']['checkTip'], s['ui']['errTitle'])
-        await page.click('#btn-err-pointer')
-        await tick(page, 0.5)
-        s = await snap(page)
-        R.check(f'[{dev}] "Play with mouse or touch" goes back to the menu', s['state'] == 'menu' and s['inputMode'] == 'pointer' and not s['ui']['check'] and s['ui']['menuBar'] and len(s['targets']) == 3)
+        await page.click('#settings-done')
 
         # ---------------------------------------------------------------- tap Classic
         c = tg['classic']

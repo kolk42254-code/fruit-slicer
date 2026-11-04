@@ -258,8 +258,10 @@ body.cam-on.cam-hidden:not(.checking) #tint { background: var(--cart); }
 .check-rows dd { margin: 0; font-weight: 600; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
 .check-rows dd.bad { color: var(--ice); }
 .check-card .actions { margin-top: 12px; gap: 8px; }
-.check-card .actions .btn { flex: 1 1 100px; }
+.check-card .actions { flex-wrap: nowrap; }
+.check-card .actions .btn { flex: 1 1 auto; min-width: 0; white-space: nowrap; }
 .check-card .note { margin-top: 8px; }
+.check-card .note:empty { display: none; }
 .check-text {
   display: block; width: 100%; height: 140px; margin-top: 8px; padding: 8px; border-radius: 10px; border: 1px solid var(--edge);
   background: var(--bg); color: var(--text); font: 12px/1.35 ui-monospace, Menlo, Consolas, monospace; resize: vertical;
@@ -276,7 +278,8 @@ body.cam-on.cam-hidden:not(.checking) #tint { background: var(--cart); }
 }
 @media (min-width: 760px) { .check-card { right: auto; width: 470px; margin: 0; } }
 @media (max-height: 520px) and (min-width: 600px) { /* phone held sideways: numbers on the left, hand room on the right */
-  .check-card { top: calc(var(--safe-t) + 12px); right: auto; width: min(440px, 50%); max-height: none; margin: 0; }
+  .check-card { top: calc(var(--safe-t) + 12px); bottom: auto; right: auto; width: min(440px, 50%); margin: 0;
+    max-height: calc(100% - var(--safe-t) - var(--safe-b) - 24px); }
   .check-tip { left: auto; right: var(--gut-r); transform: none; max-width: calc(50% - 40px); }
 }
 
@@ -382,7 +385,7 @@ body.cam-on.cam-hidden:not(.checking) #tint { background: var(--cart); }
     <button id="btn-check-reset" class="btn btn-ghost small" type="button" aria-label="Reset numbers">Reset</button>
     <button id="btn-check-done" class="btn btn-ghost small" type="button">Done</button>
   </div>
-  <p id="check-note" class="note" role="status">Swipe a few times, then copy the report or take a screenshot.</p>
+  <p id="check-note" class="note" role="status"></p>
   <textarea id="check-text" class="check-text" readonly hidden aria-label="Tracking report"></textarea>
 </section>
 
@@ -2315,7 +2318,7 @@ body.cam-on.cam-hidden:not(.checking) #tint { background: var(--cart); }
     showPanel(null);
     items.length = 0; waveQueue = []; targets = []; pendingAction = null; marks.length = 0;
     el.menuHead.hidden = true; el.results.hidden = true; el.handHint.hidden = true; el.lightHint.hidden = true;
-    el.checkText.hidden = true; el.checkNote.textContent = 'Swipe a few times, then copy the report or take a screenshot.';
+    el.checkText.hidden = true; el.checkNote.textContent = '';
     resetDiag();
     updateHudForState();
     resetStrokes();
@@ -2357,10 +2360,10 @@ body.cam-on.cam-hidden:not(.checking) #tint { background: var(--cart); }
     const lostPct = N.swipeFrames ? (100 * N.swipeLost) / N.swipeFrames : 0;
     return {
       cam: [N.video.w + '×' + N.video.h + ' · ' + rate(N, N.camFps) + ' fps · light ' + (N.luma < 0 ? '…' : r0(N.luma)) + ' (' + lightWord(N.luma) + ')', N.dark || (N.camFps > 0 && N.camFps < 20)],
-      trk: [N.dead ? 'stopped' : rate(N, N.resFps) + ' results/s · ' + r0(N.tookMs) + ' ms each · ' + N.delegate + ' · ' + (N.kind === 'worker' ? 'background' : 'main thread') + ' · ' + pct(N.skippedPct) + ' skipped', N.dead || (N.resFps > 0 && N.resFps < 15)],
-      lag: [r0(N.totalMs) + ' ms total (' + (N.capTime === 'measured' ? 'camera timed' : N.capTime === 'guessed' ? 'estimated' : '…') + ') · tracker ' + r0(N.tookMs) + ' ms', N.totalMs > 150],
+      trk: [N.dead ? 'stopped' : rate(N, N.resFps) + ' results/s · ' + r0(N.tookMs) + ' ms · ' + N.delegate + ' · ' + (N.kind === 'worker' ? 'background' : 'main thread') + ' · ' + pct(N.skippedPct) + ' skipped', N.dead || (N.resFps > 0 && N.resFps < 15)],
+      lag: [r0(N.totalMs) + ' ms (' + (N.capTime === 'measured' ? 'camera timed' : N.capTime === 'guessed' ? 'estimated' : '…') + ') · tracker ' + r0(N.tookMs) + ' ms', N.totalMs > 150],
       hand: [hs.length ? hs.join(' · ') : 'no hand found', !hs.length || N.hands.some((x) => x.size < SMALL_HAND)],
-      swipe: [N.swipes + ' swipes · hand lost ' + N.swipeLost + ' of ' + N.swipeFrames + ' frames (' + pct(lostPct) + ') · longest gap ' + r0(N.gapMs) + ' ms · ' + N.broken + ' broken', lostPct > 20 || N.broken > 0],
+      swipe: [N.swipes + ' swipes · lost ' + N.swipeLost + ' of ' + N.swipeFrames + ' frames · longest gap ' + r0(N.gapMs) + ' ms · ' + N.broken + ' broken', lostPct > 20 || N.broken > 0],
       shake: [N.shakeRaw == null ? 'hold your hand still to measure' : 'shake ' + N.shakeRaw.toFixed(1) + ' px (cursor ' + N.shakeCursor.toFixed(1) + ' px) · ' + N.jumps + ' jumps', N.jumps > 0],
       scr: [N.screen.w + '×' + N.screen.h + ' px ×' + (+N.screen.dpr.toFixed(2)) + ' · drawing ' + r0(N.screen.fps) + ' fps', false]
     };
@@ -2397,9 +2400,9 @@ body.cam-on.cam-hidden:not(.checking) #tint { background: var(--cart); }
       'Camera: ' + L.cam[0] + '; camera says ' + N.camSays.w + '×' + N.camSays.h + ' at ' + r0(N.camSays.fps) + ' fps; page missed ' + pct(N.missedPct) + ' of frames',
       'Camera can: exposure modes ' + (c.exposure.length ? c.exposure.join(', ') : 'not reported') + '; exposure time ' + span(c.exposureTime) + '; frame rate ' + span(c.fps) + '; width ' + span(c.w) + '; height ' + span(c.h) + '; zoom ' + span(c.zoom),
       'Tracker: ' + L.trk[0] + (N.gpuSwitched ? '; switched from GPU to CPU (GPU too slow)' : '') + '; from ' + (N.source || '-') + '; GPU name: ' + (N.gpu || 'unknown'),
-      'Delay: ' + L.lag[0] + '; capture time ' + N.capTime + '; waiting before the tracker ' + r0(N.waitMs) + ' ms',
+      'Delay (camera to result): ' + L.lag[0] + '; capture time ' + N.capTime + '; waiting before the tracker ' + r0(N.waitMs) + ' ms',
       'Hands now: ' + L.hand[0],
-      'Swipes: ' + L.swipe[0],
+      'Swipes: ' + L.swipe[0] + ' (frames = tracker results while the fingertip moved fast)',
       'Steadiness (still hand, fingertip): ' + L.shake[0],
       'Screen: ' + L.scr[0],
       'Settings: difficulty ' + N.settings.diff + ', cut sensitivity ' + N.settings.sens + ', cut with ' + N.settings.cutWith + ', camera picture ' + N.settings.camView
