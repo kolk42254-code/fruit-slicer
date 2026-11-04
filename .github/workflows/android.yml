@@ -1,0 +1,236 @@
+# Builds the Android app (APK), tests it on an Android emulator, then publishes it on the Releases page.
+# Runs when the game (index.html) or the app changes, or by hand from the Actions tab ("Run workflow").
+# Only the main branch publishes a release; other branches (app-*) just build and test.
+name: Android app
+
+on:
+  push:
+    branches: [main, 'app-*']
+    paths: ['index.html', 'app/**', '.github/workflows/android.yml']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: android-app
+  cancel-in-progress: false
+
+env:
+  APP_ID: io.github.kolk42254code.fruitslicer
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      signed_with: ${{ steps.sign.outputs.signed_with }}
+    steps:
+      - uses: actions/checkout@v7.0.1
+
+      - uses: actions/setup-java@v6.1.0
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - uses: actions/setup-node@v7.1.0
+        with:
+          node-version: '22'
+
+      - name: Read app version
+        id: version
+        run: echo "version=$(node -p "require('./app/package.json').version")" >> "$GITHUB_OUTPUT"
+
+      - name: Install Capacitor and the hand tracker (npm)
+        working-directory: app
+        run: npm ci --no-audit --no-fund
+
+      - name: Build the app's web folder (game + offline hand tracker)
+        working-directory: app
+        run: node scripts/prepare-www.mjs
+
+      - name: Copy the web folder into the Android project
+        working-directory: app
+        run: npx cap sync android
+
+      - name: Build APKs (release + debug for the emulator test)
+        working-directory: app/android
+        run: |
+          chmod +x gradlew
+          ./gradlew --no-daemon assembleRelease assembleDebug
+          ls -la app/build/outputs/apk/release app/build/outputs/apk/debug
+
+      - name: Sign the release APK
+        id: sign
+        env:
+          SIGNING_PASSWORD: ${{ secrets.SIGNING_PASSWORD }}
+        run: |
+          set -euo pipefail
+          BT="$(ls -d "$ANDROID_HOME"/build-tools/* | sort -V | tail -1)"
+          echo "build-tools: $BT"
+          UNSIGNED=app/android/app/build/outputs/apk/release/app-release-unsigned.apk
+          mkdir -p dist
+          "$BT/zipalign" -f 4 "$UNSIGNED" dist/aligned.apk
+          ENC=app/signing/release.p12.enc
+          if [ -n "${SIGNING_PASSWORD:-}" ] && [ "$GITHUB_REF" = "refs/heads/main" ]; then
+            if [ -f "$ENC" ]; then
+              openssl enc -d -aes-256-cbc -pbkdf2 -iter 200000 -in "$ENC" -out release.p12 -pass env:SIGNING_PASSWORD
+            else
+              # first run: make the app's permanent signing key, keep only an encrypted copy in the repo
+              keytool -genkeypair -keystore release.p12 -storetype PKCS12 -alias fruitslicer -keyalg RSA -keysize 4096 \
+                -validity 10000 -dname "CN=Fruit Slicer, O=kolk42254-code" -storepass "$SIGNING_PASSWORD" -keypass "$SIGNING_PASSWORD"
+              mkdir -p app/signing
+              openssl enc -aes-256-cbc -pbkdf2 -iter 200000 -salt -in release.p12 -out "$ENC" -pass env:SIGNING_PASSWORD
+              git config user.name "github-actions[bot]"
+              git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+              git add "$ENC"
+              git commit -m "Add encrypted app signing key [skip ci]"
+              git pull --rebase origin main
+              git push origin HEAD:main
+            fi
+            "$BT/apksigner" sign --ks release.p12 --ks-type PKCS12 --ks-key-alias fruitslicer --ks-pass env:SIGNING_PASSWORD --key-pass env:SIGNING_PASSWORD \
+              --out dist/app-release.apk dist/aligned.apk
+            rm -f release.p12
+            echo "signed_with=permanent" >> "$GITHUB_OUTPUT"
+          else
+            if [ "$GITHUB_REF" = "refs/heads/main" ]; then
+              echo "::warning::SIGNING_PASSWORD secret is not set, so this APK is signed with a one-time key. Updating it later needs an uninstall first."
+            fi
+            keytool -genkeypair -keystore temp.p12 -storetype PKCS12 -alias temp -keyalg RSA -keysize 2048 -validity 10000 \
+              -dname "CN=Fruit Slicer (temporary key)" -storepass temppass -keypass temppass
+            "$BT/apksigner" sign --ks temp.p12 --ks-type PKCS12 --ks-key-alias temp --ks-pass pass:temppass --key-pass pass:temppass \
+              --out dist/app-release.apk dist/aligned.apk
+            rm -f temp.p12
+            echo "signed_with=temporary" >> "$GITHUB_OUTPUT"
+          fi
+          "$BT/apksigner" verify --verbose --print-certs dist/app-release.apk > verify.txt
+          sed -n '1,12p' verify.txt
+          cp app/android/app/build/outputs/apk/debug/app-debug.apk dist/app-debug.apk
+
+      - name: Check what is inside the APK
+        run: |
+          set -euo pipefail
+          BT="$(ls -d "$ANDROID_HOME"/build-tools/* | sort -V | tail -1)"
+          "$BT/aapt2" dump badging dist/app-release.apk > badging.txt
+          grep -E "^package|uses-permission|sdkVersion|targetSdkVersion|application-label:|uses-feature" badging.txt || true
+          unzip -l dist/app-release.apk > files.txt
+          grep -E "assets/public/(index.html|mp/|models/)" files.txt
+          for f in index.html mp/vision_bundle.js mp/wasm/vision_wasm_internal.wasm mp/wasm/vision_wasm_nosimd_internal.wasm models/hand_landmarker.task; do
+            grep -q "assets/public/$f" files.txt || { echo "::error::missing $f in the APK"; exit 1; }
+          done
+          unzip -p dist/app-release.apk assets/public/index.html > app-page.html
+          grep -q '<meta name="fs-assets" content="local">' app-page.html || { echo "::error::app page is not set to offline files"; exit 1; }
+          grep -q "android.permission.CAMERA" badging.txt || { echo "::error::camera permission missing"; exit 1; }
+          ls -la dist
+          sha256sum dist/app-release.apk | tee dist/app-release.apk.sha256
+
+      - uses: actions/upload-artifact@v7.0.2
+        with:
+          name: apks
+          path: |
+            dist/app-release.apk
+            dist/app-release.apk.sha256
+            dist/app-debug.apk
+          retention-days: 14
+
+  emulator-test:
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v7.0.1
+
+      - uses: actions/setup-node@v7.1.0
+        with:
+          node-version: '22'
+
+      - uses: actions/download-artifact@v8.0.2
+        with:
+          name: apks
+          path: dist
+
+      - name: Enable KVM (fast emulator)
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+
+      - name: Test the app on an Android 14 emulator
+        uses: reactivecircus/android-emulator-runner@v2.38.0
+        with:
+          api-level: 34
+          target: google_apis
+          arch: x86_64
+          profile: pixel_6
+          cores: 4
+          ram-size: 4096M
+          disk-size: 6000M
+          emulator-boot-timeout: 900
+          emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -no-snapshot -camera-front emulated -camera-back emulated
+          script: bash app/ci/emulator-test.sh
+
+      - name: Show test results
+        if: always()
+        run: cat ci-out/results.txt 2>/dev/null || echo "no results file"
+
+      - uses: actions/upload-artifact@v7.0.2
+        if: always()
+        with:
+          name: emulator-results
+          path: ci-out
+          retention-days: 14
+
+  release:
+    needs: [build, emulator-test]
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7.0.1
+
+      - uses: actions/download-artifact@v8.0.2
+        with:
+          name: apks
+          path: dist
+
+      - name: Publish on the Releases page
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.build.outputs.version }}
+          SIGNED_WITH: ${{ needs.build.outputs.signed_with }}
+        run: |
+          set -euo pipefail
+          TAG="v$VERSION"
+          APK="FruitSlicer-$VERSION.apk"
+          cp dist/app-release.apk "$APK"
+          SHA="$(sha256sum "$APK" | cut -d' ' -f1)"
+          {
+            echo "## Fruit Slicer $VERSION for Android"
+            echo
+            echo "Slice flying fruit with your hand in the air. The hand tracker is inside the app, so it works with no internet."
+            echo
+            echo "### Install"
+            echo "1. On your phone, download **$APK** below."
+            echo "2. Open it. If Android asks, allow installing apps from your browser or Files app."
+            echo "3. Open Fruit Slicer, tap **Turn on camera** and choose **Allow**."
+            echo
+            echo "### What's new in version 2"
+            echo "- Better accuracy: hand tracking runs in the background, fruit positions are matched to the moment each camera frame was taken, and your whole hand cuts (bombs only go off from your fingertip)."
+            echo "- Power-ups in Arcade: Freeze, Frenzy and Double points."
+            echo "- New modes: Arcade (60 s with power-ups) and Zen (90 s, no bombs)."
+            echo "- Settings: difficulty, cut sensitivity, whole hand or fingertip, camera picture on or off, sound and music volume."
+            echo "- Progress: stats, 12 achievements and 7 blade colours to unlock."
+            echo
+            if [ "$SIGNED_WITH" = "temporary" ]; then
+              echo "> Note: this APK is signed with a one-time key. To install a later version, uninstall this one first."
+              echo
+            fi
+            echo "SHA-256: \`$SHA\`"
+          } > notes.md
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" "$APK" --clobber
+            gh release edit "$TAG" --notes-file notes.md --title "Fruit Slicer $VERSION"
+          else
+            gh release create "$TAG" "$APK" --title "Fruit Slicer $VERSION" --notes-file notes.md --target "$GITHUB_SHA"
+          fi
+          echo "Released $APK ($SHA)"
