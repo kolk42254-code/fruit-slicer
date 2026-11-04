@@ -48,8 +48,9 @@ body {
 #bg { position: fixed; inset: 0; z-index: 0; background: var(--cart); }
 #cam {
   position: fixed; inset: 0; width: 100%; height: 100%; object-fit: cover; object-position: 50% 50%;
-  transform: scaleX(-1); z-index: 1; pointer-events: none; background: transparent;
+  transform: scaleX(-1); z-index: 1; pointer-events: none; background: transparent; opacity: 0;
 }
+body.cam-on #cam { opacity: 1; }
 #tint {
   position: fixed; inset: 0; z-index: 2; pointer-events: none;
   background: radial-gradient(ellipse at center, rgba(15, 5, 18, 0) 40%, rgba(15, 5, 18, 0.6) 100%), rgba(29, 13, 34, 0.36);
@@ -274,7 +275,7 @@ body.cam-on.cam-hidden #tint { background: var(--cart); }
 </head>
 <body>
 <div id="bg"></div>
-<video id="cam" playsinline muted autoplay></video>
+<video id="cam" playsinline muted autoplay poster="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7"></video>
 <div id="tint"></div>
 <div id="frost"></div>
 <canvas id="stage" aria-label="Fruit Slicer game area"></canvas>
@@ -628,7 +629,7 @@ body.cam-on.cam-hidden #tint { background: var(--cart); }
   el.pchips = {};
   el.powers.querySelectorAll('.pchip').forEach((c) => { el.pchips[c.dataset.p] = { root: c, bar: c.querySelector('.bar i') }; });
   if (ASSETS_LOCAL) el.introNote.textContent = 'The camera picture stays on your phone. Everything runs offline.';
-  if (coarsePointer) $('pause-note').hidden = true;
+  if (coarsePointer || ASSETS_LOCAL) $('pause-note').hidden = true;
 
   // ================================================================ screen
   let W = 1, H = 1, DPR = 1, MIN = 1, DIAG = 1, G = 1, gravMul = 1;
@@ -2471,20 +2472,32 @@ body.cam-on.cam-hidden #tint { background: var(--cart); }
     } else if ((k === 'm' || k === 'M') && !onControl) toggleMute();
     else if (k === 'Enter' && !onControl && state === 'over' && resultsShown && !pendingAction) startCountdown(mode);
   });
-  document.addEventListener('visibilitychange', () => {
+  // Leaving: pause, save, quiet the sound, and turn the camera off (the app at once, a browser tab after 3 s).
+  // Coming back: sound and camera on again (the game stays paused until the player resumes).
+  let appHidden = false;
+  function onAway(hidden, fromApp) {
     clearTimeout(camSleepTimer);
-    if (document.hidden) {
+    if (hidden) {
       pauseGame(); saveProgress();
       try { if (actx) actx.suspend(); } catch (e) { /* ignore */ }
       if (camOn) {
-        if (ASSETS_LOCAL) sleepCamera();
+        if (fromApp || ASSETS_LOCAL) sleepCamera();
         else camSleepTimer = setTimeout(() => { if (document.hidden) sleepCamera(); }, 3000);
       }
     } else {
       if (camAsleep) wakeCamera(); else if (camOn) requestWakeLock();
       try { if (actx) actx.resume(); } catch (e) { /* ignore */ }
     }
-  });
+  }
+  document.addEventListener('visibilitychange', () => { if (!appHidden) onAway(document.hidden, false); });
+  // The Android app calls this when it leaves and comes back to the screen (some WebViews do not report it).
+  window.__fsAppHidden = (hidden) => {
+    hidden = !!hidden;
+    if (hidden === appHidden) return true;
+    appHidden = hidden;
+    onAway(hidden, true);
+    return true;
+  };
   window.addEventListener('pagehide', saveProgress);
   window.addEventListener('resize', resize);
   // Android app back button: returns true when the game used the press

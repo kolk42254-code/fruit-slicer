@@ -135,6 +135,8 @@ async function main() {
   if (MODE === 'debug') {
     check('start screen is shown', await cdp.eval("!document.getElementById('intro').hidden"));
     check('app page is set to the bundled (offline) tracker files', (await cdp.eval("document.querySelector('meta[name=fs-assets]').content")) === 'local');
+    const cam = await cdp.eval("({ poster: document.getElementById('cam').poster.slice(0, 15), opacity: getComputedStyle(document.getElementById('cam')).opacity })");
+    check('no grey video placeholder before the camera starts', cam.poster === 'data:image/gif' && cam.opacity === '0', JSON.stringify(cam));
     const info = await cdp.eval(`({ ua: navigator.userAgent, w: innerWidth, h: innerHeight, dpr: devicePixelRatio,
       cssTop: getComputedStyle(document.documentElement).getPropertyValue('--safe-area-inset-top'),
       hudPad: getComputedStyle(document.getElementById('hud')).paddingTop, title: document.title })`);
@@ -196,8 +198,8 @@ async function main() {
   adb('shell input keyevent KEYCODE_BACK');
   await sleep(3000);
   try { log('top activity after Back: ' + adb('shell dumpsys activity activities | grep -m1 topResumedActivity').trim()); } catch (err) { /* grep found nothing */ }
-  const away = await cdp.eval('({ hidden: document.hidden, tracks: __FS.snap().camTracks })');
-  check('Back in the menu leaves the app and turns the camera off', away.hidden === true && away.tracks === 0, JSON.stringify(away));
+  const away = await cdp.eval('({ hidden: document.hidden, tracks: __FS.snap().camTracks, asleep: __FS.snap().camAsleep })');
+  check('Back in the menu leaves the app and turns the camera off', away.tracks === 0 && away.asleep === true, JSON.stringify(away));
   adb(`shell am start -n ${PKG}/.MainActivity`);
   await sleep(7000);
   const back = await cdp.eval('({ hidden: document.hidden, tracks: __FS.snap().camTracks, camOn: __FS.snap().camOn, state: __FS.snap().state })');
@@ -207,7 +209,8 @@ async function main() {
 }
 
 function finish(cdp) {
-  const noise = /gl_context|landmark_projection|inference_feedback|XNNPACK|OpenGL error checking|Graph successfully|GL version/;
+  // MediaPipe info lines, and Capacitor's own safe-area helper when it runs while the page reloads (the game uses env() instead)
+  const noise = /gl_context|landmark_projection|inference_feedback|XNNPACK|OpenGL error checking|Graph successfully|GL version|Error injecting safe area CSS/;
   const bad = cdp.console.filter((l) => /^\[(error|exception)\]/.test(l) && !noise.test(l));
   check('no unexpected errors in the page console', bad.length === 0, bad.slice(0, 3).join(' | '));
   fs.writeFileSync(`${OUT}/console_${MODE}.txt`, cdp.console.join('\n'));
