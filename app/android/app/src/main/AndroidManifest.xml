@@ -42,4 +42,6 @@
     <uses-permission android:name="android.permission.CAMERA" />
     <uses-feature android:name="android.hardware.camera" android:required="false" />
     <uses-feature android:name="android.hardware.camera.front" android:required="false" />
+    <!-- A short buzz when a bomb goes off. -->
+    <uses-permission android:name="android.permission.VIBRATE" />
 </manifest>

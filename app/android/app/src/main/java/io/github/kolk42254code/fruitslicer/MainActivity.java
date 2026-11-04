@@ -36,4 +36,24 @@ public class MainActivity extends BridgeActivity {
             }
         });
     }
+
+    // When the app is no longer on screen, tell the WebView, so the page is marked hidden:
+    // the game pauses and turns the camera off. It turns the camera back on when the app comes back.
+    @Override
+    public void onStop() {
+        super.onStop();
+        WebView webView = getBridge() != null ? getBridge().getWebView() : null;
+        if (webView != null) {
+            webView.onPause();
+        }
+    }
+
+    @Override
+    public void onStart() {
+        super.onStart();
+        WebView webView = getBridge() != null ? getBridge().getWebView() : null;
+        if (webView != null) {
+            webView.onResume();
+        }
+    }
 }

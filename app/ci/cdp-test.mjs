@@ -195,6 +195,7 @@ async function main() {
   check('Back again goes to the menu', s.state === 'menu', s.state);
   adb('shell input keyevent KEYCODE_BACK');
   await sleep(3000);
+  try { log('top activity after Back: ' + adb('shell dumpsys activity activities | grep -m1 topResumedActivity').trim()); } catch (err) { /* grep found nothing */ }
   const away = await cdp.eval('({ hidden: document.hidden, tracks: __FS.snap().camTracks })');
   check('Back in the menu leaves the app and turns the camera off', away.hidden === true && away.tracks === 0, JSON.stringify(away));
   adb(`shell am start -n ${PKG}/.MainActivity`);
