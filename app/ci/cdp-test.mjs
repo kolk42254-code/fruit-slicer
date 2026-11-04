@@ -236,6 +236,41 @@ async function main() {
   const back = await cdp.eval('({ hidden: document.hidden, tracks: __FS.snap().camTracks, camOn: __FS.snap().camOn, state: __FS.snap().state })');
   check('opening the app again turns the camera back on', back.hidden === false && back.tracks === 1 && back.camOn, JSON.stringify(back));
   await cdp.shot('05_back_again');
+
+  // the tracking check screen (Settings > Check hand tracking) in a real Android WebView
+  dismissSystemDialogs();
+  await cdp.eval("__FS.menu(); __FS.check(); true");
+  await sleep(5000);
+  s = await cdp.eval('__FS.snap()');
+  check('tracking check opens with live numbers', s.state === 'check' && s.ui.check && /results\/s/.test(s.ui.checkRows.trk) && !/^…/.test(s.ui.checkRows.trk),
+    JSON.stringify(s.ui.checkRows));
+  await cdp.shot('06_check');
+  const chk = await cdp.eval(`(async () => {
+    const img = new Image(); img.src = 'data:image/jpeg;base64,${jpg}'; await img.decode();
+    __FS.feedOnly(true); __FS.setVideoSize(640, 480); __FS.manual(true);
+    for (let i = 0; i < 4; i++) { await __FS.feed(img, __FS.now()); __FS.tick(1 / 30, 1); }
+    __FS.refreshCheck();
+    const n = __FS.checkNumbers();
+    return { hands: n.hands, can: n.can, camSays: n.camSays, capTime: n.capTime, rows: __FS.snap().ui.checkRows };
+  })()`);
+  check('tracking check: the hand photo shows one hand with its size (about 35%) and sure score',
+    chk.hands.length === 1 && Math.abs(chk.hands[0].size - 0.347) < 0.03 && chk.hands[0].sure > 0.5, JSON.stringify(chk.hands));
+  log('camera details here: ' + JSON.stringify({ can: chk.can, camSays: chk.camSays, capTime: chk.capTime }));
+  await cdp.shot('07_check_hand');
+  const copy = await cdp.eval(`(async () => {
+    document.getElementById('btn-check-copy').click();
+    await new Promise((r) => setTimeout(r, 1000));
+    return { note: document.getElementById('check-note').textContent, shown: !document.getElementById('check-text').hidden, report: __FS.report() };
+  })()`);
+  check('Copy report: copied, or shown to copy by hand', /copied/.test(copy.note) ? !copy.shown : copy.shown && /Could not copy/.test(copy.note), copy.note);
+  check('report names the app and its own tracker files', /\(app\)/.test(copy.report) && /from local/.test(copy.report), copy.report.split('\n')[1]);
+  log('tracking report on this emulator:\n' + copy.report);
+  await cdp.eval('__FS.feedOnly(false); __FS.manual(false); true');
+  dismissSystemDialogs();
+  adb('shell input keyevent KEYCODE_BACK');
+  await sleep(1500);
+  s = await cdp.eval('__FS.snap()');
+  check('Back button closes the tracking check', s.state === 'menu' && !s.ui.check, s.state);
   return finish(cdp);
 }
 

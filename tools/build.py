@@ -2,6 +2,7 @@
 """Build the game: src/game.template.html  ->  index.html (the website and the Android app use this file).
 
 The two OFL fonts in src/fonts are put inside the page as base64, so the page needs no font downloads.
+The app version (app/package.json) is written into the page, for the tracking report.
 Never edit index.html by hand: edit src/game.template.html, then run:
 
     python tools/build.py            # writes index.html
@@ -9,7 +10,7 @@ Never edit index.html by hand: edit src/game.template.html, then run:
 
 It also writes tests/out/www-app/index.html (the Android-app variant, used by the camera tests).
 """
-import base64, hashlib, os, re, sys
+import base64, hashlib, json, os, re, sys
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SRC = os.path.join(ROOT, 'src', 'game.template.html')
@@ -21,6 +22,7 @@ FONT_FILES = {
     '__FONT_BALOO_700__': 'baloo-2-latin-700-normal.woff2',
     '__FONT_BALOO_800__': 'baloo-2-latin-800-normal.woff2',
 }
+APP_PACKAGE = os.path.join(ROOT, 'app', 'package.json')   # its "version" is shown in the game's tracking report
 WEB_TAG = '<meta name="fs-assets" content="cdn">'
 APP_TAG = '<meta name="fs-assets" content="local">'
 
@@ -34,6 +36,12 @@ def build_html():
         if html.count(key) != 1:
             sys.exit(f'placeholder {key} found {html.count(key)} times in the template')
         html = html.replace(key, base64.b64encode(data).decode('ascii'))
+    version = json.load(open(APP_PACKAGE, encoding='utf-8'))['version']
+    if not re.fullmatch(r'\d+\.\d+\.\d+', version):
+        sys.exit(f'app/package.json: unexpected version {version!r}')
+    if html.count('__GAME_VERSION__') != 1:
+        sys.exit('placeholder __GAME_VERSION__ must be in the template exactly once')
+    html = html.replace('__GAME_VERSION__', version)
     left = re.findall(r'__[A-Z0-9_]{6,}__', html)
     if left:
         sys.exit(f'unfilled placeholders: {left}')

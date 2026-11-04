@@ -51,7 +51,8 @@ The script is one IIFE split into sections by comment lines `// =====…===== <n
 config, helpers, settings & progress, elements, screen, fruit art, world, effects, rules, achievements, blades,
 hand tracker, sound and music, UI, update, render, main loop, wiring (test hooks are at its end), start.
 
-- **States:** `intro → loading → menu → countdown → playing ⇄ paused → over (results)`, plus `error`.
+- **States:** `intro → loading → menu → countdown → playing ⇄ paused → over (results)`, plus `error` and `check`
+  (the tracking check screen).
 - **Modes:** `MODES` = classic (3 misses), arcade (60 s, power-ups, bomb = −10), zen (90 s, no bombs).
   `DIFF` (easy/normal/hard), `SENS` (cut sensitivity), `POWERS` (freeze 5 s, frenzy 4 s, double 7 s).
 - **Blades (all input):** every mouse/touch pointer and every tracked hand point is a "blade".
@@ -71,13 +72,21 @@ hand tracker, sound and music, UI, update, render, main loop, wiring (test hooks
   Transparent poster + invisible until the camera is on (Android shows a grey "play" picture otherwise).
 - **Leaving:** web `visibilitychange` (camera off after 3 s hidden); app `window.__fsAppHidden(true/false)` from
   `MainActivity.onPause/onResume` (some WebViews never mark the page hidden). The game pauses and frees the camera.
+- **Tracking check** (Settings → "Check hand tracking", only from the menu): camera picture + the tracker's raw hand
+  skeleton + the smoothed cursor + live numbers (camera size/fps/light, tracker results/s, ms per frame, GPU/CPU,
+  thread, skipped frames, delay camera → result, hand size and "sure" score, swipe frames where the hand was lost,
+  longest gap, broken swipes, still-hand shake, one-frame jumps, drawing fps). "Copy report" puts a text report on the
+  clipboard (falls back to `execCommand('copy')`, then shows the text to copy by hand). Counters live in `diag`
+  (always counted, reset when the screen opens); `checkNumbers()` → `checkLines()` → rows / `buildReport()`.
+  The page version comes from `app/package.json` (`__GAME_VERSION__`, filled in by `tools/build.py`).
 - **Saved on the device:** `localStorage` keys `fruitSlicer.settings` and `fruitSlicer.progress` (stats, achievements,
   blade colour). Version-1 keys are migrated.
 - **Tuning knobs:** `CFG` (fruitHit, bombHit 0.9, teleport 0.6, maxSwipe 8, camGap 0.3, gapReset 0.25,
   speedWindow 0.05, comboWindow 0.22, track* matching limits), `SENS`, `CUT_POINTS`, cursor glide in `drawBlades`.
 - **Test hooks** (`#test`): `__FS.snap()` (full state), `manual/tick` (controlled clock), `spawn`, `point/end` (fake
   strokes), `feed(image, t)` (run the real tracker on one picture), `feedOnly`, `setVideoSize`, `toScreen`, `posAt`,
-  `power`, `setSetting`, `back` (app Back button), `clearItems`, `progress`, `start/menu/pause/resume`.
+  `power`, `setSetting`, `back` (app Back button), `clearItems`, `progress`, `start/menu/pause/resume`,
+  `check` (open the tracking check), `checkNumbers`, `report`, `copyReport`, `resetDiag`, `refreshCheck`.
 
 ## Build, test, release
 

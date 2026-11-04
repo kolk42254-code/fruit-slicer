@@ -26,6 +26,14 @@ Follow the rules in `CLAUDE.md`: two full test rounds before every release, and 
 
 ### A1. Build a "Tracking check" screen first (measure before fixing)
 
+> **Status (4 Nov 2026): built, test rounds in progress** (branch `claude/awesome-hawking-1jsm05`; tests:
+> `t2_camera.py r1 check,checklayout`, checks in `t2_logic.py`, and a step in `app/ci/cdp-test.mjs`). Not published yet.
+> Next: two full test rounds + CI emulator, publish, then the owner sends a report from the phone.
+> Notes for reading a report: "Swipes … hand lost X of Y frames" counts tracker results while the fingertip was fast
+> (or for 0.25 s after); "broken" = the hand came back later than `CFG.camGap` or was dropped; "Steadiness" = fingertip
+> shake while the hand is still (raw tracker point vs. smoothed cursor, in screen pixels); "jumps" = one-frame
+> outliers; hand size = longer side of the landmark box ÷ picture width; "sure" = MediaPipe's handedness score.
+
 There is no way to see the phone from here, so the game must show its own numbers.
 
 - Add a button **Settings → "Check hand tracking"**. It opens the camera picture with the **hand skeleton**

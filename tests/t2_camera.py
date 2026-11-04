@@ -1,7 +1,8 @@
 """Suite B (v2): the real hand tracker, running in its background thread.
 Mapping accuracy, still-hand steadiness, two hands, phone portrait, no hand, real webcam clip, dark room,
 frame-by-frame swipes (sharp, blurred, slow tracker) with whole-hand and fingertip cutting, slow-GPU switch,
-main-thread fallback, the offline app files, and a file opened straight from disk."""
+main-thread fallback, the offline app files, a file opened straight from disk, and the tracking check screen
+(its numbers, skeleton, report copy, and layout on phones)."""
 import asyncio, json, math, os, pathlib, sys, time
 from playwright.async_api import async_playwright
 from harness import *
@@ -342,6 +343,10 @@ async def app_case(p, R):
     await page.wait_for_timeout(4000)
     s = await snap(page)
     R.check('[app files] coming back turns the camera on and finds the hand again', s['camTracks'] == 1 and s['camOn'] and len(s['hands']) == 1 and s['state'] == 'paused', f"tracks {s['camTracks']}, hands {len(s['hands'])}")
+    await page.evaluate("__FS.menu(); __FS.check()")
+    await page.wait_for_timeout(3000)
+    rep = await page.evaluate('__FS.report()')
+    R.check('[app files] tracking check works in the app: report says app and local tracker files', f'Version {APP_VERSION} (app)' in rep and 'from local' in rep and 'hand 1: size' in rep, rep[:300])
     await br.close()
     srv.shutdown()
 
@@ -364,6 +369,226 @@ async def realtime_swipe_case(p, R):
     R.check('[live swipe video] console clean', not bad, ' | '.join(bad[:3]))
     await br.close()
 
+# ---------------------------------------------------------------- tracking check screen (Settings > Check hand tracking)
+CLIP_JS = """(() => {  // fake clipboard: mode 'ok' = copy works, 'cmd' = only the older copy command, 'none' = all copying blocked
+  window.__clip = { mode: 'ok', text: null };
+  try {
+    Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText: (t) => {
+      if (window.__clip.mode === 'ok') { window.__clip.text = t; return Promise.resolve(); }
+      return Promise.reject(new Error('blocked'));
+    } } });
+  } catch (e) {}
+  const ex = Document.prototype.execCommand;
+  Document.prototype.execCommand = function (c, ...a) { if (c === 'copy' && window.__clip.mode === 'none') return false; return ex.call(this, c, ...a); };
+})();"""
+
+SEQ_JS = """async ([frUrl, nohandUrl, seq, fps]) => {   // feed a list of [video, frame] (or ['nohand', 0], ['small', scale]) at fps
+  window.__imgs2 = window.__imgs2 || {};
+  const load = (u) => window.__imgs2[u] || (window.__imgs2[u] = new Promise((res, rej) => { const i = new Image(); i.onload = () => res(i); i.onerror = rej; i.src = u; }));
+  const log = [];
+  for (const [name, i] of seq) {
+    let img;
+    if (name === 'nohand') img = await load(nohandUrl);
+    else if (name === 'small') {  // the still hand shrunk to a share of its size: a hand far from the camera
+      const im = await load(frUrl + 'swipe_sharp/f001.png'), c = document.createElement('canvas');
+      c.width = 640; c.height = 480;
+      const g = c.getContext('2d'); g.drawImage(im, 0, 0); g.fillStyle = 'rgb(205,205,205)'; g.fillRect(0, 0, 640, 480);
+      g.drawImage(im, 0, 0, 640, 480, 200, 150, 640 * i, 480 * i);
+      img = c;
+    } else img = await load(frUrl + name + '/f' + String(i + 1).padStart(3, '0') + '.png');
+    const tips = await __FS.feed(img, __FS.now());
+    log.push(tips ? tips.length : -1);
+    __FS.tick(1 / fps, 1);
+  }
+  __FS.refreshCheck();
+  return log;
+}"""
+FR_URL = pathlib.Path(VIDEOS, 'frames').resolve().as_uri() + '/'
+NOHAND_URL = pathlib.Path(VIDEOS, 'nohand_frame0.jpg').resolve().as_uri()
+
+SKEL_JS = """() => {  // skeleton pixels: the light-blue bone colour at the middle of 3 finger bones
+  const raw = __FS.raw()[0];
+  if (!raw) return null;
+  const c = document.getElementById('stage'), g = c.getContext('2d'), k = c.width / c.getBoundingClientRect().width, out = [];
+  for (const [a, b] of [[5, 6], [9, 10], [13, 14]]) {
+    const A = __FS.toScreen(raw[a].x, raw[a].y), B = __FS.toScreen(raw[b].x, raw[b].y);
+    const d = g.getImageData(Math.round((A.x + B.x) / 2 * k) - 2, Math.round((A.y + B.y) / 2 * k) - 2, 5, 5).data;
+    let n = 0;
+    for (let i = 0; i < d.length; i += 4) if (d[i + 3] > 200 && d[i + 2] > 200 && d[i + 2] > d[i] + 60) n++;
+    out.push(n);
+  }
+  return out;
+}"""
+APP_VERSION = json.load(open(os.path.join(ROOT, 'app', 'package.json')))['version']
+# true size of the test hand: Python MediaPipe's landmark box in front-back.jpg (make_videos.py), scaled as in the video
+HAND_PX = max(530 - 123, 656 - 66) * 260 / 690
+
+async def seq(page, items, fps=30):
+    return await page.evaluate(SEQ_JS, [FR_URL, NOHAND_URL, items, fps])
+
+def frames(name, a, b):
+    return [[name, i] for i in range(a, b + 1)]
+
+async def reopen_check(page):
+    await page.click('#btn-settings'); await page.click('#btn-check')
+    return await snap(page)
+
+async def check_case(p, R):
+    W, H = 1280, 720
+    br = await launch(p, video='static_one')
+    ctx, page = await open_game(br, Net(), W, H, init_js=CLIP_JS)
+    await page.click('#btn-pointer')
+    await page.click('#btn-settings')
+    await page.click('#btn-check')
+    s = await snap(page)
+    R.check('[check] from mouse/touch mode it turns the camera on first (loading screen)', s['state'] == 'loading' and s['ui']['loading'] and not s['ui']['settings'], s['state'])
+    await wait_state(page, 'check', timeout=180000)
+    await page.wait_for_timeout(6000)
+    s = await snap(page)
+    N = await page.evaluate('__FS.checkNumbers()')
+    vis = await page.evaluate("getComputedStyle(document.getElementById('cam')).opacity")
+    R.check('[check] check screen: camera picture, numbers and tip shown; menu and score hidden',
+            s['ui']['check'] and s['ui']['checkTip'] and vis == '1' and not s['ui']['hud'] and not s['ui']['menuHead'] and not s['ui']['menuBar'] and s['inputMode'] == 'camera', s['ui']['checkTip'])
+    R.check('[check] camera: 640x480, frames arriving, light measured as good', N['video'] == {'w': 640, 'h': 480} and N['camFps'] > 3 and N['luma'] > 80 and not N['dark'],
+            f"{N['video']} {N['camFps']:.1f} fps, light {N['luma']}")
+    R.check('[check] tracker: results per second, time per frame, same GPU/CPU and thread as the game uses',
+            N['resFps'] > 0 and N['tookMs'] > 0 and N['delegate'] == s['delegate'] and N['kind'] == s['trackerKind'] == 'worker' and 0 <= N['skippedPct'] <= 100,
+            f"{N['resFps']:.1f}/s, {N['tookMs']:.0f} ms, {N['delegate']}, skipped {N['skippedPct']:.0f}%")
+    R.check('[check] delay: camera-to-result is at least the tracker time; capture time known or estimated',
+            N['totalMs'] >= N['tookMs'] > 0 and N['capTime'] in ('measured', 'guessed') and N['waitMs'] >= 0, f"total {N['totalMs']:.0f} ms, tracker {N['tookMs']:.0f} ms, capture time {N['capTime']}")
+    exp = HAND_PX / 640
+    R.check(f'[check] hand size = true hand box ({exp:.1%} of the picture width), tracker sure > 90%',
+            len(N['hands']) == 1 and abs(N['hands'][0]['size'] - exp) < 0.02 and N['hands'][0]['sure'] > 0.9, json.dumps(N['hands']))
+    rows = s['ui']['checkRows']
+    R.check('[check] all 7 rows filled in on screen', all(v and v != '…' for v in rows.values()) and '640×480' in rows['cam'] and 'hand 1: size' in rows['hand'] and 'results/s' in rows['trk'], json.dumps(rows, ensure_ascii=False)[:300])
+    px = await page.evaluate(SKEL_JS)
+    R.check('[check] hand skeleton drawn on the finger bones', px is not None and all(n >= 2 for n in px), str(px))
+    tip0 = s['hands'][0] if s['hands'] else None
+    raw8 = (await page.evaluate('__FS.raw()'))[0][8]
+    t8 = await page.evaluate(f"__FS.toScreen({raw8['x']}, {raw8['y']})")
+    R.check('[check] cursor and skeleton fingertip at the same place (< 8 px)', tip0 and math.hypot(tip0['sx'] - t8['x'], tip0['sy'] - t8['y']) < 8, f"cursor ({tip0 and round(tip0['sx'])},{tip0 and round(tip0['sy'])}) tip ({t8['x']:.0f},{t8['y']:.0f})")
+    await page.screenshot(path=f'{OUT}/{TAG}_check_1280x720.png')
+
+    # copy the report
+    await page.click('#btn-check-copy')
+    await page.wait_for_function('window.__clip.text !== null', timeout=5000)
+    text = await page.evaluate('window.__clip.text')
+    s = await snap(page)
+    need = ('Camera: 640×480', 'Camera can: ', 'Tracker: ', 'Delay: ', 'Hands now: hand 1: size ', 'Swipes: ', 'Steadiness', 'Screen: 1280×720', 'Settings: difficulty normal')
+    R.check(f'[check] Copy report: report on the clipboard with version {APP_VERSION}, camera, tracker, delay, hand, swipes, screen, settings',
+            text.startswith('Fruit Slicer tracking report') and f'Version {APP_VERSION} (website)' in text and all(k in text for k in need), text[:400])
+    R.check('[check] says the report was copied', 'copied' in s['ui']['checkNote'] and not s['ui']['checkText'], s['ui']['checkNote'])
+    await page.evaluate("window.__clip.mode = 'none'")
+    await page.click('#btn-check-copy'); await page.wait_for_timeout(300)
+    s = await snap(page)
+    shown = await page.evaluate("document.getElementById('check-text').value")
+    R.check('[check] copying blocked: the report is shown to copy by hand', s['ui']['checkText'] and 'Could not copy' in s['ui']['checkNote'] and shown.startswith('Fruit Slicer tracking report'), s['ui']['checkNote'])
+    await page.evaluate("window.__clip.mode = 'cmd'")
+    await page.click('#btn-check-copy'); await page.wait_for_timeout(300)
+    s = await snap(page)
+    R.check('[check] clipboard refused: the older copy way is tried (copied, or shown to copy by hand)',
+            ('copied' in s['ui']['checkNote'] and not s['ui']['checkText']) or ('Could not copy' in s['ui']['checkNote'] and s['ui']['checkText']), s['ui']['checkNote'])
+    await page.evaluate("window.__clip.mode = 'ok'")
+
+    # leaving and coming back
+    await page.click('#btn-check-done')
+    s = await snap(page)
+    px = await page.evaluate(SKEL_JS)
+    R.check('[check] Done: back to the menu, camera still on, no skeleton', s['state'] == 'menu' and not s['ui']['check'] and not s['ui']['checkTip'] and s['ui']['menuBar'] and s['camOn'] and px is not None and not any(px), str(px))
+    s = await reopen_check(page)
+    R.check('[check] camera already on: opens at once (no loading)', s['state'] == 'check' and s['ui']['check'] and not s['ui']['loading'])
+    r = await page.evaluate('__FS.back()'); s = await snap(page)
+    R.check('[check] phone Back button closes it', r is True and s['state'] == 'menu' and not s['ui']['check'])
+    await reopen_check(page)
+    await page.keyboard.press('Escape'); s = await snap(page)
+    R.check('[check] Escape closes it', s['state'] == 'menu' and not s['ui']['check'])
+    await reopen_check(page)
+    await page.click('#check-x'); s = await snap(page)
+    R.check('[check] the X button closes it', s['state'] == 'menu' and not s['ui']['check'])
+    await page.evaluate("__FS.setSetting('camView', 'hide')")
+    s = await reopen_check(page)
+    tint_check = await page.evaluate("getComputedStyle(document.getElementById('tint')).backgroundImage")
+    await page.click('#btn-check-done')
+    tint_menu = await page.evaluate("getComputedStyle(document.getElementById('tint')).backgroundImage")
+    R.check('[check] with "Camera picture: Hide" the check still shows the camera picture (hidden again after)',
+            'repeating-linear-gradient' not in tint_check and 'repeating-linear-gradient' in tint_menu, tint_check[:60])
+    await page.evaluate("__FS.setSetting('camView', 'show')")
+
+    # frame by frame with the real tracker and a controlled clock (30 fps)
+    s = await reopen_check(page)
+    await page.evaluate("__FS.feedOnly(true); __FS.setVideoSize(640, 480); __FS.manual(true); __FS.resetDiag()")
+    log = await seq(page, frames('swipe_sharp', 0, 17))
+    N = await page.evaluate('__FS.checkNumbers()')
+    R.check('[check] still hand: shake measured and small (< 2 px), the cursor shakes less, no jumps, no swipes',
+            all(n == 1 for n in log) and N['shakeRaw'] is not None and N['shakeRaw'] < 2 and N['shakeCursor'] <= N['shakeRaw'] and N['jumps'] == 0 and N['swipes'] == 0,
+            f"shake {N['shakeRaw']} px raw, {N['shakeCursor']} px cursor, jumps {N['jumps']}, swipes {N['swipes']}, found {log}")
+    await page.evaluate('__FS.resetDiag()')
+    log = await seq(page, frames('swipe_sharp', 10, 30))
+    N = await page.evaluate('__FS.checkNumbers()')
+    R.check('[check] one sharp swipe: 1 swipe, hand never lost, gap = one frame (33 ms), nothing broken',
+            N['swipes'] == 1 and N['swipeFrames'] >= 8 and N['swipeLost'] == 0 and N['broken'] == 0 and 25 <= N['gapMs'] <= 45,
+            f"swipes {N['swipes']}, lost {N['swipeLost']}/{N['swipeFrames']}, gap {N['gapMs']:.0f} ms, broken {N['broken']}, found {log}")
+    await page.evaluate('__FS.resetDiag()')
+    log = await seq(page, frames('swipe_sharp', 10, 20) + [['nohand', 0]] * 2 + frames('swipe_sharp', 23, 30))
+    N = await page.evaluate('__FS.checkNumbers()')
+    R.check('[check] hand lost for 2 frames mid-swipe: 2 lost frames, gap 100 ms, swipe not broken',
+            N['swipeLost'] == 2 and N['broken'] == 0 and 90 <= N['gapMs'] <= 110 and N['swipes'] == 1,
+            f"swipes {N['swipes']}, lost {N['swipeLost']}/{N['swipeFrames']}, gap {N['gapMs']:.0f} ms, broken {N['broken']}, found {log}")
+    await page.evaluate('__FS.resetDiag()')
+    log = await seq(page, frames('swipe_sharp', 26, 33) + frames('swipe_sharp', 44, 46) + [['nohand', 0]] * 12 + frames('swipe_sharp', 51, 51) * 6)
+    N = await page.evaluate('__FS.checkNumbers()')
+    R.check('[check] hand lost for 0.4 s mid-swipe: counted as a broken swipe',
+            N['broken'] == 1 and N['swipeLost'] >= 5, f"swipes {N['swipes']}, lost {N['swipeLost']}/{N['swipeFrames']}, broken {N['broken']}, found {log}")
+    await page.evaluate('__FS.resetDiag()')
+    log = await seq(page, frames('swipe_sharp', 0, 9) + [['swipe_sharp', 19]] + frames('swipe_sharp', 10, 17))
+    N = await page.evaluate('__FS.checkNumbers()')
+    R.check('[check] a one-frame jump of the fingertip is counted (1 jump)', N['jumps'] == 1 and all(n == 1 for n in log), f"jumps {N['jumps']}, found {log}")
+    await seq(page, [['nohand', 0]] * 12)
+    s = await snap(page)
+    R.check('[check] no hand: "Show your hand" tip, no hand in the numbers', 'Show your hand' in s['ui']['checkTip'] and s['ui']['checkRows']['hand'] == 'no hand found', s['ui']['checkTip'])
+    log = await seq(page, [['small', 0.3]] * 4)
+    s = await snap(page)
+    N = await page.evaluate('__FS.checkNumbers()')
+    R.check('[check] hand far away (small in the picture): "Come closer" tip', all(n == 1 for n in log) and 'Come closer' in s['ui']['checkTip'] and N['hands'] and N['hands'][0]['size'] < 0.12,
+            f"{s['ui']['checkTip']} {json.dumps(N['hands'])} found {log}")
+    log = await seq(page, frames('swipe_sharp', 0, 17))   # 0.6 s: the small hand's trail (0.3 s) is gone
+    s = await snap(page)
+    R.check('[check] hand close again: back to the normal tip', 'Swipe your hand' in s['ui']['checkTip'], s['ui']['checkTip'])
+    errs = await page.evaluate('window.__FS_ERRORS || []')
+    R.check('[check] no frame errors', not errs, str(errs[:2]))
+    bad = problems(page, MP_NOISE)
+    R.check('[check] console clean', not bad, ' | '.join(bad[:3]))
+    await br.close()
+
+async def check_layout_case(p, R):
+    br = await launch(p, video='portrait_one')
+    ctx, page = await open_game(br, Net(), 412, 915, mobile=True, dpr=2)
+    await start_camera(page)
+    await page.evaluate('__FS.check()')
+    await wait_state(page, 'check', timeout=30000)
+    await page.wait_for_timeout(4000)
+    for (w, h) in ((412, 915), (915, 412), (360, 740)):
+        await page.set_viewport_size({'width': w, 'height': h})
+        await page.wait_for_timeout(700)
+        await page.evaluate('__FS.refreshCheck()')
+        box = await page.locator('#check').bounding_box()
+        tip = await page.locator('#check-tip').bounding_box()
+        btns = [await page.locator(sel).bounding_box() for sel in ('#btn-check-copy', '#btn-check-reset', '#btn-check-done')]
+        scroll_w = await page.evaluate('document.documentElement.scrollWidth')
+        inside = box['x'] >= 0 and box['y'] >= 0 and box['x'] + box['width'] <= w + 0.5 and box['y'] + box['height'] <= h + 0.5 and scroll_w <= w
+        if h > w:   # upright phone: the numbers stay in the lower part, the hand has the top
+            room = box['y'] >= 0.45 * h
+        else:       # sideways: numbers on the left half, tip on the right half
+            room = box['x'] + box['width'] <= 0.52 * w and tip['x'] >= box['x'] + box['width']
+        no_overlap = tip['y'] + tip['height'] <= box['y'] or tip['x'] >= box['x'] + box['width']
+        btn_ok = all(b and b['height'] >= 36 and b['y'] + b['height'] <= h for b in btns)
+        R.check(f'[check layout {w}x{h}] numbers fully on screen, room left for the hand, tip clear of the numbers, buttons usable',
+                inside and room and no_overlap and btn_ok, f"card {box}, tip {tip}, page width {scroll_w}")
+        await page.screenshot(path=f'{OUT}/{TAG}_check_{w}x{h}.png')
+    bad = problems(page, MP_NOISE)
+    R.check('[check layout] console clean', not bad, ' | '.join(bad[:3]))
+    await br.close()
+
 async def main():
     R = Report(f'Suite B v2 camera ({TAG})')
     async with async_playwright() as p:
@@ -382,6 +607,8 @@ async def main():
             'nofileflag': lambda: nofileflag_case(p, R),
             'app': lambda: app_case(p, R),
             'live': lambda: realtime_swipe_case(p, R),
+            'check': lambda: check_case(p, R),
+            'checklayout': lambda: check_layout_case(p, R),
         }
         for name, fn in cases.items():
             if ONLY and name not in ONLY:

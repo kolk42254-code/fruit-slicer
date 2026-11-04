@@ -56,7 +56,7 @@ body.cam-on #cam { opacity: 1; }
   background: radial-gradient(ellipse at center, rgba(15, 5, 18, 0) 40%, rgba(15, 5, 18, 0.6) 100%), rgba(29, 13, 34, 0.36);
 }
 body:not(.cam-on) #tint { display: none; }
-body.cam-on.cam-hidden #tint { background: var(--cart); }
+body.cam-on.cam-hidden:not(.checking) #tint { background: var(--cart); }
 #frost {
   position: fixed; inset: 0; z-index: 3; pointer-events: none; opacity: 0; transition: opacity 0.35s;
   background: radial-gradient(ellipse at center, rgba(127, 216, 255, 0) 48%, rgba(127, 216, 255, 0.45) 100%);
@@ -240,6 +240,46 @@ body.cam-on.cam-hidden #tint { background: var(--cart); }
 .swatch[aria-pressed="true"] { border-color: var(--mango); box-shadow: 0 0 0 2px var(--mango) inset; }
 .swatch:disabled { cursor: not-allowed; opacity: 0.6; }
 
+/* ---------- Tracking check (camera picture + hand skeleton + live numbers) ---------- */
+.check-row { margin: 0 0 16px; }
+.check-row .help { margin: 6px 0 0; font-size: 14px; color: var(--muted); }
+.check-tip { top: calc(var(--safe-t) + 14px); color: var(--text); }
+.check-tip.warn { color: var(--ice); }
+.check-card {
+  position: fixed; z-index: 6; left: var(--gut-l); right: var(--gut-r); bottom: calc(var(--safe-b) + 12px); margin: 0 auto;
+  width: auto; max-width: 520px; max-height: calc(100% - var(--safe-t) - var(--safe-b) - 72px); overflow-y: auto;
+  padding: 12px 16px 14px; background: rgba(37, 16, 41, 0.9); border-radius: 18px;
+}
+.check-card .h2 { font-size: 22px; margin: 0; }
+.check-card .panel-head { margin-bottom: 6px; }
+.check-card .icon-btn { width: 40px; height: 40px; }
+.check-rows { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 3px 12px; margin: 0; font-size: 14px; line-height: 1.35; }
+.check-rows dt { font-weight: 800; color: var(--mango); }
+.check-rows dd { margin: 0; font-weight: 600; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+.check-rows dd.bad { color: var(--ice); }
+.check-card .actions { margin-top: 12px; gap: 8px; }
+.check-card .actions .btn { flex: 1 1 100px; }
+.check-card .note { margin-top: 8px; }
+.check-text {
+  display: block; width: 100%; height: 140px; margin-top: 8px; padding: 8px; border-radius: 10px; border: 1px solid var(--edge);
+  background: var(--bg); color: var(--text); font: 12px/1.35 ui-monospace, Menlo, Consolas, monospace; resize: vertical;
+  -webkit-user-select: text; user-select: text;
+}
+@media (max-width: 520px) {
+  .check-card { padding: 10px 12px 12px; }
+  .check-card .h2 { font-size: 19px; }
+  .check-card .icon-btn { width: 36px; height: 36px; }
+  .check-rows { font-size: 13px; gap: 2px 10px; }
+  .check-card .actions { margin-top: 10px; }
+  .check-card .btn.small { min-height: 40px; padding: 6px 10px; }
+  .check-card .note { font-size: 13px; margin-top: 6px; }
+}
+@media (min-width: 760px) { .check-card { right: auto; width: 470px; margin: 0; } }
+@media (max-height: 520px) and (min-width: 600px) { /* phone held sideways: numbers on the left, hand room on the right */
+  .check-card { top: calc(var(--safe-t) + 12px); right: auto; width: min(440px, 50%); max-height: none; margin: 0; }
+  .check-tip { left: auto; right: var(--gut-r); transform: none; max-width: calc(50% - 40px); }
+}
+
 /* ---------- Results ---------- */
 .results {
   position: fixed; top: 0; left: 0; right: 0; z-index: 6; display: flex; justify-content: center; pointer-events: none;
@@ -333,6 +373,19 @@ body.cam-on.cam-hidden #tint { background: var(--cart); }
   </div>
 </section>
 
+<p id="check-tip" class="hint check-tip" hidden role="status" aria-live="polite"></p>
+<section id="check" class="card check-card" hidden aria-labelledby="check-title">
+  <div class="panel-head"><h2 class="h2" id="check-title">Tracking check</h2><button id="check-x" class="icon-btn" type="button" aria-label="Close tracking check"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"/></svg></button></div>
+  <dl id="check-rows" class="check-rows"></dl>
+  <div class="actions">
+    <button id="btn-check-copy" class="btn btn-primary small" type="button">Copy report</button>
+    <button id="btn-check-reset" class="btn btn-ghost small" type="button" aria-label="Reset numbers">Reset</button>
+    <button id="btn-check-done" class="btn btn-ghost small" type="button">Done</button>
+  </div>
+  <p id="check-note" class="note" role="status">Swipe a few times, then copy the report or take a screenshot.</p>
+  <textarea id="check-text" class="check-text" readonly hidden aria-label="Tracking report"></textarea>
+</section>
+
 <section id="intro" class="overlay">
   <div class="card">
     <h1 class="title">Fruit Slicer</h1>
@@ -420,6 +473,10 @@ body.cam-on.cam-hidden #tint { background: var(--cart); }
         <label><input type="radio" name="camView" id="cam-hide" value="hide"><span>Hide</span></label>
       </div>
     </fieldset>
+    <div id="check-row" class="check-row">
+      <button id="btn-check" class="btn btn-ghost small" type="button">Check hand tracking</button>
+      <p class="help">See what the hand tracker sees, with live numbers you can copy and send.</p>
+    </div>
     <label class="range" for="set-sfx">Sound effects <output id="out-sfx">80</output><input type="range" id="set-sfx" min="0" max="100" step="5"></label>
     <label class="range" for="set-music">Music <output id="out-music">50</output><input type="range" id="set-music" min="0" max="100" step="5"></label>
     <div class="reset">
@@ -455,6 +512,7 @@ body.cam-on.cam-hidden #tint { background: var(--cart); }
   // ================================================================ config
   const TAU = Math.PI * 2;
   const MP_VERSION = '1.1.1';
+  const GAME_VERSION = '__GAME_VERSION__'; // from app/package.json (filled in by tools/build.py)
   const MP_CDN = 'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@' + MP_VERSION;
   const MODEL_CDN = [
     'https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task',
@@ -623,7 +681,8 @@ body.cam-on.cam-hidden #tint { background: var(--cart); }
     error: $('error'), errTitle: $('err-title'), errMsg: $('err-msg'), pause: $('pause'), settings: $('settings'), progressPanel: $('progress'),
     results: $('results'), resTitle: $('res-title'), resScore: $('res-score'), resBest: $('res-best'), resNew: $('res-new'), resExtra: $('res-extra'),
     menuHead: $('menu-head'), menuNote: $('menu-note'), useCamBtn: $('btn-use-camera'), menuBar: $('menu-bar'), frost: $('frost'),
-    stats: $('stats'), swatches: $('swatches'), achList: $('ach-list'), achCount: $('ach-count'), resetConfirm: $('reset-confirm')
+    stats: $('stats'), swatches: $('swatches'), achList: $('ach-list'), achCount: $('ach-count'), resetConfirm: $('reset-confirm'),
+    check: $('check'), checkTip: $('check-tip'), checkRows: $('check-rows'), checkNote: $('check-note'), checkText: $('check-text'), checkRow: $('check-row')
   };
   el.loadBarFill = el.loadBar.firstElementChild;
   el.pchips = {};
@@ -910,7 +969,7 @@ body.cam-on.cam-hidden #tint { background: var(--cart); }
   const juiceOf = (key) => (key.indexOf('power_') === 0 ? POWERS[key.slice(6)].color : FRUIT[key].juice);
 
   // ================================================================ world
-  let state = 'intro';          // intro | loading | error | menu | countdown | playing | paused | over
+  let state = 'intro';          // intro | loading | error | menu | countdown | playing | paused | over | check (tracking check)
   let mode = 'classic';         // classic | arcade | zen
   let inputMode = 'none';       // camera | pointer
   let score = 0, lives = 3, timeLeft = 0, gameElapsed = 0, countdownT = 0, overAt = 0, overReason = '';
@@ -1339,6 +1398,7 @@ body.cam-on.cam-hidden #tint { background: var(--cart); }
         if (b.speed > (stats[k] || 0)) stats[k] = Math.round(b.speed);
       }
       if (b.speed >= CFG.sliceSpeed * MIN) {
+        if (id[0] === 'c' && b.primary && t - b.fastAt > 0.3) diag.swipes++;
         b.fastAt = t; b.fastRecv = b.recv;
         stats.cuts++;
         cutAlong(last.x, last.y, x, y, b, last.t, t);
@@ -1429,11 +1489,14 @@ body.cam-on.cam-hidden #tint { background: var(--cart); }
         } catch (err) { self.postMessage({ type: 'error', message: String((err && err.message) || err) }); }
       } else if (m.type === 'frame') {
         const t0 = performance.now();
-        let hands = [], ok = true, msg = '';
-        try { const res = lm.detectForVideo(m.bitmap, m.ts); hands = (res.landmarks || []).map((h) => h.map((p) => [p.x, p.y])); }
-        catch (err) { ok = false; msg = String((err && err.message) || err); }
+        let hands = [], hd = [], ok = true, msg = '';
+        try {
+          const res = lm.detectForVideo(m.bitmap, m.ts);
+          hands = (res.landmarks || []).map((h) => h.map((p) => [p.x, p.y]));
+          hd = (res.handedness || res.handednesses || []).map((c) => (c && c[0] ? [String(c[0].categoryName), +c[0].score] : null));
+        } catch (err) { ok = false; msg = String((err && err.message) || err); }
         try { m.bitmap.close(); } catch (err) { /* ignore */ }
-        self.postMessage({ type: 'result', id: m.id, ok, msg, hands, took: performance.now() - t0 });
+        self.postMessage({ type: 'result', id: m.id, ok, msg, hands, hd, took: performance.now() - t0 });
       }
     };
   }
@@ -1483,7 +1546,11 @@ body.cam-on.cam-hidden #tint { background: var(--cart); }
     detect(source, ts) { // one frame at a time; resolves with { ok, hands, took }
       if (this.kind === 'main') {
         const t0 = performance.now();
-        try { const res = this.lm.detectForVideo(source, ts); return Promise.resolve({ ok: true, hands: (res.landmarks || []).map((h) => h.map((p) => [p.x, p.y])), took: performance.now() - t0 }); }
+        try {
+          const res = this.lm.detectForVideo(source, ts);
+          return Promise.resolve({ ok: true, hands: (res.landmarks || []).map((h) => h.map((p) => [p.x, p.y])),
+            hd: (res.handedness || res.handednesses || []).map((c) => (c && c[0] ? [String(c[0].categoryName), +c[0].score] : null)), took: performance.now() - t0 });
+        }
         catch (err) { return Promise.resolve({ ok: false, msg: String((err && err.message) || err), hands: [], took: performance.now() - t0 }); }
       }
       // the next frame is only sent once the thread has answered, so frames never pile up
@@ -1537,6 +1604,23 @@ body.cam-on.cam-hidden #tint { background: var(--cart); }
   const lumaCanvas = document.createElement('canvas'); lumaCanvas.width = 32; lumaCanvas.height = 24;
   let lumaCtx = null;
   function resetDetectStats() { detectFails = 0; detectCount = 0; detectHist = []; detectMs = 0; }
+  // Numbers for the tracking check screen (Settings > Check hand tracking). Always counted (cheap); reset when it opens.
+  let diag = null;
+  function resetDiag() {
+    diag = { since: performance.now(), frames: 0, missed: 0, lastPresented: -1, capKnown: 0, capGuess: 0, skipped: 0, results: 0,
+      took: [], wait: [], total: [], swipes: 0, swipeFrames: 0, swipeLost: 0, gapMax: 0, broken: 0, shakeRaw: -1, shakeCursor: -1, jumps: 0,
+      rateAt: performance.now(), rateFrames: 0, rateResults: 0, rated: false, camFps: 0, resFps: 0 };
+  }
+  resetDiag();
+  function diagPush(arr, v) { arr.push(v); if (arr.length > 40) arr.shift(); }
+  function medianOf(arr) { if (!arr.length) return 0; const s = arr.slice().sort((a, b) => a - b); return s[Math.floor(s.length / 2)]; }
+  function diagRates() { // camera frames and tracker results per second, measured over about 1 s
+    const now = performance.now(), dt = (now - diag.rateAt) / 1000;
+    if (dt < 1) return;
+    const all = diag.frames + diag.missed; // frames the page saw + frames it never got to see
+    diag.camFps = (all - diag.rateFrames) / dt; diag.resFps = (diag.results - diag.rateResults) / dt;
+    diag.rateAt = now; diag.rateFrames = all; diag.rateResults = diag.results; diag.rated = true;
+  }
 
   function loadScript(src) {
     return new Promise((resolve, reject) => {
@@ -1732,9 +1816,11 @@ body.cam-on.cam-hidden #tint { background: var(--cart); }
     if (state !== 'loading') return;
     camOn = true; document.body.classList.add('cam-on');
     requestWakeLock();
-    showMenu();
+    const next = afterCamera;
+    afterCamera = 'menu';
+    if (next === 'check') showCheck(); else showMenu();
   }
-  function startPointerMode() { initAudio(); stopCamera(); inputMode = 'pointer'; showMenu(); }
+  function startPointerMode() { initAudio(); stopCamera(); inputMode = 'pointer'; afterCamera = 'menu'; showMenu(); }
   function renderLoad() {
     if (el.loading.hidden) return;
     el.loadCam.textContent = camStage === 'ready' ? 'On' : camStage === 'failed' ? 'Not available' : 'Waiting for permission';
@@ -1792,9 +1878,13 @@ body.cam-on.cam-hidden #tint { background: var(--cart); }
       video.requestVideoFrameCallback(onFrame);
       lastRvfcAt = performance.now();
       let cap = meta && meta.captureTime > 0 ? meta.captureTime : 0;
-      const pnow = performance.now();
-      if (!(cap > pnow - 1000 && cap <= pnow + 5)) cap = pnow - 20; // unknown capture time: assume a typical delay
-      processFrame(cap);
+      const pnow = performance.now(), measured = cap > pnow - 1000 && cap <= pnow + 5;
+      if (!measured) cap = pnow - 20; // unknown capture time: assume a typical delay
+      if (meta && meta.presentedFrames > 0) { // a jump in this count = camera frames the page never got to see
+        if (diag.lastPresented >= 0 && meta.presentedFrames > diag.lastPresented + 1) diag.missed += Math.min(30, meta.presentedFrames - diag.lastPresented - 1);
+        diag.lastPresented = meta.presentedFrames;
+      }
+      processFrame(cap, measured);
     };
     video.requestVideoFrameCallback(onFrame);
   }
@@ -1804,16 +1894,19 @@ body.cam-on.cam-hidden #tint { background: var(--cart); }
     const vt = video.currentTime;
     if (vt === lastVideoTime) return;
     lastVideoTime = vt;
-    processFrame(performance.now() - 20);
+    processFrame(performance.now() - 20, false);
   }
   function nextTs() { lastTs = Math.max(lastTs + 1, performance.now()); return lastTs; }
-  function processFrame(capMs) {
-    if (!camOn || !tracker.ready || tracker.busy || tracker.switching || trackingDead || feedOnly) return;
+  function processFrame(capMs, measured) {
+    if (!camOn || !tracker.ready || tracker.switching || trackingDead || feedOnly) return;
     if (video.readyState < 2 || !video.videoWidth) return;
-    const ts = nextTs();
-    tracker.detect(video, ts).then((r) => onDetections(r, capMs / 1000, true));
+    diag.frames++;
+    if (measured) diag.capKnown++; else diag.capGuess++;
+    if (tracker.busy) { diag.skipped++; return; } // still working on the last frame
+    const ts = nextTs(), sentMs = performance.now();
+    tracker.detect(video, ts).then((r) => onDetections(r, capMs / 1000, true, sentMs));
   }
-  function onDetections(r, tCap, live) {
+  function onDetections(r, tCap, live, sentMs) {
     if (r && r.skip) return [];
     if (!r || !r.ok) {
       detectFails++;
@@ -1827,7 +1920,12 @@ body.cam-on.cam-hidden #tint { background: var(--cart); }
     const recv = nowS();
     if (lastResultAt) detInterval = detInterval * 0.8 + clamp(recv - lastResultAt, 0.005, 0.5) * 0.2;
     lastResultAt = recv;
-    if (live) latencyMs = latencyMs * 0.8 + (performance.now() - tCap * 1000) * 0.2;
+    if (live) {
+      const total = performance.now() - tCap * 1000;
+      latencyMs = latencyMs * 0.8 + total * 0.2;
+      diag.results++; diagPush(diag.total, total); diagPush(diag.took, r.took || 0);
+      if (sentMs) diagPush(diag.wait, sentMs - tCap * 1000);
+    }
     if (detectCount > 3) {
       detectMs = detectMs ? detectMs * 0.85 + r.took * 0.15 : r.took;
       detectHist.push(r.took);
@@ -1837,12 +1935,23 @@ body.cam-on.cam-hidden #tint { background: var(--cart); }
         if (r.took > 1000 || median > 300 || (detectHist.length >= 8 && median > 120)) { slowGpuSwitch = true; tracker.switchToCpu(); }
       }
     }
-    const lms = (r.hands || []).filter((h) => h && h.length >= 21 && isFinite(h[8][0]) && isFinite(h[8][1]));
+    const lms = [], hds = [], hd = r.hd || [];
+    (r.hands || []).forEach((h, i) => { if (h && h.length >= 21 && isFinite(h[8][0]) && isFinite(h[8][1])) { lms.push(h); hds.push(hd[i] || null); } });
     if (TEST) lastRaw = lms.map((h) => h.map((p) => ({ x: p[0], y: p[1] })));
-    updateHands(lms, tCap);
+    updateHands(lms, tCap, hds);
     return lms.map((h) => ({ nx: h[8][0], ny: h[8][1] }));
   }
-  function updateHands(lms, t) {
+  function handFast(h, t) { const b = blades.get(h.bid + 't'); return !!b && t >= b.fastAt && t - b.fastAt < 0.25; }
+  function noteSwipeFrame(h, t, lost) { // tracking check: was the hand found on the frames of a fast swipe?
+    diag.swipeFrames++;
+    if (lost) { diag.swipeLost++; h.fastLost = true; return; }
+    const gap = t - h.seen;
+    if (gap > diag.gapMax) diag.gapMax = gap;
+    if (h.fastLost && gap > CFG.camGap) diag.broken++; // back too late: the swipe was cut in two
+    h.fastLost = false;
+  }
+  function updateHands(lms, t, hds) {
+    const fastBefore = hands.map((h) => handFast(h, t));
     const pairs = [];
     hands.forEach((h, hi) => lms.forEach((lm, pi) => pairs.push({ hi, pi, d: Math.hypot(lm[8][0] - h.rx, lm[8][1] - h.ry) })));
     pairs.sort((a, b) => a.d - b.d);
@@ -1852,19 +1961,24 @@ body.cam-on.cam-hidden #tint { background: var(--cart); }
       const limit = clamp((t - hands[pr.hi].seen) * CFG.trackSpeed, CFG.trackMatch, CFG.trackMatchMax);
       if (pr.d > limit) continue;
       usedH.add(pr.hi); usedP.add(pr.pi);
-      feedHand(hands[pr.hi], lms[pr.pi], t);
+      if (fastBefore[pr.hi] || hands[pr.hi].fastLost) noteSwipeFrame(hands[pr.hi], t, false);
+      feedHand(hands[pr.hi], lms[pr.pi], t, hds && hds[pr.pi]);
     }
+    hands.forEach((h, hi) => { if (!usedH.has(hi) && fastBefore[hi]) noteSwipeFrame(h, t, true); });
     lms.forEach((lm, pi) => {
       if (usedP.has(pi)) return;
       const h = { id: ++handSeq, bid: 'c' + handSeq, rx: lm[8][0], ry: lm[8][1], seen: t, recv: nowS(), sx: 0, sy: 0, dx: null, dy: null, f: {} };
       hands.push(h);
-      feedHand(h, lm, t);
+      feedHand(h, lm, t, hds && hds[pi]);
     });
-    hands = hands.filter((h) => { if (t - h.seen > CFG.trackTimeout && nowS() - h.recv > CFG.trackTimeout) { endHand(h); return false; } return true; });
+    hands = hands.filter((h) => {
+      if (t - h.seen > CFG.trackTimeout && nowS() - h.recv > CFG.trackTimeout) { if (h.fastLost) diag.broken++; endHand(h); return false; }
+      return true;
+    });
     if (lms.length) handsSeenAt = nowS();
   }
-  function feedHand(h, lm, t) {
-    h.rx = lm[8][0]; h.ry = lm[8][1]; h.seen = t; h.recv = nowS();
+  function feedHand(h, lm, t, hd) {
+    h.rx = lm[8][0]; h.ry = lm[8][1]; h.seen = t; h.recv = nowS(); h.lm = lm; h.hd = hd || null;
     for (const [suf, idx, primary] of CUT_POINTS) {
       if (!primary && settings.cutWith !== 'hand') continue;
       const p = lm[idx];
@@ -1872,9 +1986,25 @@ body.cam-on.cam-hidden #tint { background: var(--cart); }
       let f = h.f[suf];
       if (!f) f = h.f[suf] = { fx: new OneEuro(1.2, 25, 1), fy: new OneEuro(1.2, 25, 1) };
       const s = toScreen(f.fx.filter(p[0], t), f.fy.filter(p[1], t));
-      if (primary) { h.sx = s.x; h.sy = s.y; if (h.dx === null) { h.dx = s.x; h.dy = s.y; } }
+      if (primary) { h.sx = s.x; h.sy = s.y; if (h.dx === null) { h.dx = s.x; h.dy = s.y; } noteShake(h, p, s, t); }
       bladePoint(h.bid + suf, s.x, s.y, t, primary);
     }
+  }
+  // Tracking check: fingertip shake while the hand is still (raw tracker point and smoothed cursor) and one-frame jumps.
+  function noteShake(h, p, s, t) {
+    const raw = toScreen(p[0], p[1]), q = h.q || (h.q = []);
+    q.push({ t, x: raw.x, y: raw.y, fx: s.x, fy: s.y });
+    if (q.length > 3) q.shift();
+    if (q.length < 3) return;
+    const a = q[0], b = q[1], c = q[2];
+    if (c.t - a.t > 0.8 || c.t <= a.t) return; // frames too far apart (the hand was lost)
+    const step = Math.hypot(b.x - a.x, b.y - a.y);
+    if (step > 0.06 * MIN && Math.hypot(c.x - a.x, c.y - a.y) < 0.4 * step) diag.jumps++; // jumped away and came straight back
+    if (Math.hypot(c.fx - a.fx, c.fy - a.fy) / (c.t - a.t) > 0.15 * MIN) return; // moving: not a still hand
+    // middle point vs. the average of its neighbours: 0 for a still or steadily moving point, grows with jitter
+    const r2 = (b.x - (a.x + c.x) / 2) ** 2 + (b.y - (a.y + c.y) / 2) ** 2, f2 = (b.fx - (a.fx + c.fx) / 2) ** 2 + (b.fy - (a.fy + c.fy) / 2) ** 2;
+    diag.shakeRaw = diag.shakeRaw < 0 ? r2 : diag.shakeRaw * 0.9 + r2 * 0.1;
+    diag.shakeCursor = diag.shakeCursor < 0 ? f2 : diag.shakeCursor * 0.9 + f2 * 0.1;
   }
   function endHand(h) { for (const [suf] of CUT_POINTS) endBlade(h.bid + suf); }
   function checkLight(t) {
@@ -1974,7 +2104,7 @@ body.cam-on.cam-hidden #tint { background: var(--cart); }
   const Music = {
     on: false, timer: 0, next: 0, step: 0,
     update() {
-      const want = !!actx && !settings.muted && settings.music > 0 && state !== 'intro' && state !== 'loading' && state !== 'error';
+      const want = !!actx && !settings.muted && settings.music > 0 && state !== 'intro' && state !== 'loading' && state !== 'error' && state !== 'check';
       if (want && !this.on) this.start(); else if (!want && this.on) this.stop();
     },
     start() { this.on = true; this.next = actx.currentTime + 0.12; this.step = 0; this.timer = setInterval(() => this.tick(), 60); },
@@ -2012,6 +2142,9 @@ body.cam-on.cam-hidden #tint { background: var(--cart); }
     el.pauseBtn.hidden = !(state === 'countdown' || state === 'playing');
     el.menuBar.hidden = state !== 'menu';
     if (state !== 'menu') { el.chip.hidden = true; el.lightChip.hidden = true; }
+    const checking = state === 'check';
+    el.check.hidden = !checking; el.checkTip.hidden = !checking;
+    document.body.classList.toggle('checking', checking);
     Music.update();
   }
   function updateScoreUI() { el.score.textContent = score; el.best.textContent = Math.max(bestFor(mode), score); }
@@ -2081,6 +2214,7 @@ body.cam-on.cam-hidden #tint { background: var(--cart); }
   function openSettings(from) {
     settingsFrom = from || 'menu';
     syncSettingsForm();
+    el.checkRow.hidden = settingsFrom === 'pause';
     if (settingsFrom === 'pause') el.pause.hidden = true;
     el.settings.hidden = false;
     resetStrokes();
@@ -2159,6 +2293,140 @@ body.cam-on.cam-hidden #tint { background: var(--cart); }
   }
   function openProgress() { renderProgress(); el.progressPanel.hidden = false; resetStrokes(); }
   function closeProgress() { el.progressPanel.hidden = true; blurActive(); resetStrokes(); }
+
+  // tracking check screen: camera picture + hand skeleton + live numbers, and a report to copy
+  const SMALL_HAND = 0.12; // a hand smaller than this share of the picture width is far away (small = noisy)
+  const CHECK_ROWS = [['cam', 'Camera'], ['trk', 'Tracker'], ['lag', 'Delay'], ['hand', 'Hands'], ['swipe', 'Swipes'], ['shake', 'Steadiness'], ['scr', 'Screen']];
+  const checkCells = {};
+  for (const [k, label] of CHECK_ROWS) {
+    const dt = document.createElement('dt'), dd = document.createElement('dd');
+    dt.textContent = label; dd.textContent = '…';
+    el.checkRows.append(dt, dd); checkCells[k] = dd;
+  }
+  let afterCamera = 'menu', checkDrawnAt = 0;
+  function openCheck() {
+    el.settings.hidden = true; resetStrokes();
+    if (inputMode === 'camera' && camOn) { showCheck(); return; }
+    afterCamera = 'check'; // turn the camera on first, then come back here
+    enableCamera();
+  }
+  function showCheck() {
+    state = 'check';
+    showPanel(null);
+    items.length = 0; waveQueue = []; targets = []; pendingAction = null; marks.length = 0;
+    el.menuHead.hidden = true; el.results.hidden = true; el.handHint.hidden = true; el.lightHint.hidden = true;
+    el.checkText.hidden = true; el.checkNote.textContent = 'Swipe a few times, then copy the report or take a screenshot.';
+    resetDiag();
+    updateHudForState();
+    resetStrokes();
+    renderCheck(true);
+  }
+  function handInfo(h) { // size = the hand's longer side as a share of the picture width; sure = the tracker's confidence
+    let x0 = 1, x1 = 0, y0 = 1, y1 = 0;
+    for (const p of h.lm) { if (p[0] < x0) x0 = p[0]; if (p[0] > x1) x1 = p[0]; if (p[1] < y0) y0 = p[1]; if (p[1] > y1) y1 = p[1]; }
+    const vw = (videoSizeOverride && videoSizeOverride.w) || video.videoWidth || 640, vh = (videoSizeOverride && videoSizeOverride.h) || video.videoHeight || 480;
+    return { size: Math.max((x1 - x0) * vw, (y1 - y0) * vh) / vw, sure: h.hd && isFinite(h.hd[1]) ? h.hd[1] : null };
+  }
+  function checkNumbers(full) { // full: also ask the camera what it is set to and what it can do (for the report)
+    const tr = full && camStream && camStream.getVideoTracks()[0];
+    let cs = {}, cc = {};
+    try { if (tr && tr.getSettings) cs = tr.getSettings() || {}; } catch (e) { /* not supported */ }
+    try { if (tr && tr.getCapabilities) cc = tr.getCapabilities() || {}; } catch (e) { /* not supported */ }
+    const t = nowS(), keep = Math.max(0.25, detInterval * 3);
+    const rng = (r) => (r && isFinite(r.min) && isFinite(r.max) ? [+r.min, +r.max] : null);
+    return {
+      version: GAME_VERSION, where: ASSETS_LOCAL ? 'app' : 'website', ua: navigator.userAgent, secs: (performance.now() - diag.since) / 1000,
+      video: { w: video.videoWidth, h: video.videoHeight }, camSays: { w: cs.width || 0, h: cs.height || 0, fps: cs.frameRate || 0 },
+      rated: diag.rated, camFps: diag.camFps, missedPct: diag.frames ? (100 * diag.missed) / (diag.frames + diag.missed) : 0, luma: lastLuma, dark: lightDark,
+      can: { exposure: Array.isArray(cc.exposureMode) ? cc.exposureMode.slice() : [], exposureTime: rng(cc.exposureTime), fps: rng(cc.frameRate),
+        w: rng(cc.width), h: rng(cc.height), zoom: rng(cc.zoom) },
+      resFps: diag.resFps, tookMs: medianOf(diag.took), totalMs: medianOf(diag.total), waitMs: medianOf(diag.wait),
+      skippedPct: diag.frames ? (100 * diag.skipped) / diag.frames : 0, capTime: diag.capKnown + diag.capGuess === 0 ? 'none yet' : diag.capKnown >= diag.capGuess ? 'measured' : 'guessed',
+      delegate: tracker.delegate || '-', kind: tracker.kind || '-', gpu: gpuName, source: trackerSource, dead: trackingDead, gpuSwitched: slowGpuSwitch,
+      hands: hands.filter((h) => h.lm && t - h.recv <= keep).map(handInfo),
+      swipes: diag.swipes, swipeFrames: diag.swipeFrames, swipeLost: diag.swipeLost, gapMs: diag.gapMax * 1000, broken: diag.broken,
+      shakeRaw: diag.shakeRaw >= 0 ? Math.sqrt(diag.shakeRaw / 1.5) : null, shakeCursor: diag.shakeCursor >= 0 ? Math.sqrt(diag.shakeCursor / 1.5) : null, jumps: diag.jumps,
+      screen: { w: W, h: H, dpr: window.devicePixelRatio || 1, fps: fpsAvg }, settings: Object.assign({}, settings)
+    };
+  }
+  const r0 = (v) => String(Math.round(v)), pct = (v) => Math.round(v) + '%';
+  const rate = (N, v) => (N.rated ? r0(v) : '…'); // per-second numbers need about 1 s of counting
+  const lightWord = (l) => (l < 0 ? 'not measured yet' : l < 48 ? 'too dark' : l < 80 ? 'dim' : 'good');
+  function checkLines(N) { // one short line per row; bad = worth a closer look
+    const hs = N.hands.map((x, i) => 'hand ' + (i + 1) + ': size ' + pct(x.size * 100) + (x.sure != null ? ', sure ' + pct(x.sure * 100) : ''));
+    const lostPct = N.swipeFrames ? (100 * N.swipeLost) / N.swipeFrames : 0;
+    return {
+      cam: [N.video.w + '×' + N.video.h + ' · ' + rate(N, N.camFps) + ' fps · light ' + (N.luma < 0 ? '…' : r0(N.luma)) + ' (' + lightWord(N.luma) + ')', N.dark || (N.camFps > 0 && N.camFps < 20)],
+      trk: [N.dead ? 'stopped' : rate(N, N.resFps) + ' results/s · ' + r0(N.tookMs) + ' ms each · ' + N.delegate + ' · ' + (N.kind === 'worker' ? 'background' : 'main thread') + ' · ' + pct(N.skippedPct) + ' skipped', N.dead || (N.resFps > 0 && N.resFps < 15)],
+      lag: [r0(N.totalMs) + ' ms total (' + (N.capTime === 'measured' ? 'camera timed' : N.capTime === 'guessed' ? 'estimated' : '…') + ') · tracker ' + r0(N.tookMs) + ' ms', N.totalMs > 150],
+      hand: [hs.length ? hs.join(' · ') : 'no hand found', !hs.length || N.hands.some((x) => x.size < SMALL_HAND)],
+      swipe: [N.swipes + ' swipes · hand lost ' + N.swipeLost + ' of ' + N.swipeFrames + ' frames (' + pct(lostPct) + ') · longest gap ' + r0(N.gapMs) + ' ms · ' + N.broken + ' broken', lostPct > 20 || N.broken > 0],
+      shake: [N.shakeRaw == null ? 'hold your hand still to measure' : 'shake ' + N.shakeRaw.toFixed(1) + ' px (cursor ' + N.shakeCursor.toFixed(1) + ' px) · ' + N.jumps + ' jumps', N.jumps > 0],
+      scr: [N.screen.w + '×' + N.screen.h + ' px ×' + (+N.screen.dpr.toFixed(2)) + ' · drawing ' + r0(N.screen.fps) + ' fps', false]
+    };
+  }
+  function renderCheck(force) {
+    if (state !== 'check') return;
+    const now = performance.now();
+    if (!force && now - checkDrawnAt < 250) return;
+    checkDrawnAt = now;
+    diagRates();
+    const N = checkNumbers(), L = checkLines(N);
+    for (const [k] of CHECK_ROWS) {
+      if (checkCells[k].textContent !== L[k][0]) checkCells[k].textContent = L[k][0];
+      checkCells[k].classList.toggle('bad', !!L[k][1]);
+    }
+    let tip = 'Swipe your hand a few times, then copy the report.', warn = true;
+    if (N.dead) tip = 'Hand tracking stopped. Close this and turn the camera on again.';
+    else if (N.dark) tip = 'Too dark: turn on a light so your hand tracks better.';
+    else if (!N.hands.length) tip = coarsePointer ? 'Show your hand to the camera, standing where you play.' : 'Show your hand to the camera.';
+    else if (N.hands.some((x) => x.size < SMALL_HAND)) tip = 'Come closer: your hand is small in the picture.';
+    else warn = false;
+    if (el.checkTip.textContent !== tip) el.checkTip.textContent = tip;
+    el.checkTip.classList.toggle('warn', warn);
+  }
+  function buildReport() {
+    diagRates();
+    const N = checkNumbers(true), L = checkLines(N), c = N.can;
+    const span = (r) => (r ? +r[0].toFixed(2) + '-' + +r[1].toFixed(2) : 'not reported');
+    const d = new Date(), two = (n) => String(n).padStart(2, '0');
+    return [
+      'Fruit Slicer tracking report',
+      'Version ' + N.version + ' (' + N.where + '), ' + d.getFullYear() + '-' + two(d.getMonth() + 1) + '-' + two(d.getDate()) + ' ' + two(d.getHours()) + ':' + two(d.getMinutes()) + ', numbers from the last ' + r0(N.secs) + ' s',
+      'Device: ' + N.ua,
+      'Camera: ' + L.cam[0] + '; camera says ' + N.camSays.w + '×' + N.camSays.h + ' at ' + r0(N.camSays.fps) + ' fps; page missed ' + pct(N.missedPct) + ' of frames',
+      'Camera can: exposure modes ' + (c.exposure.length ? c.exposure.join(', ') : 'not reported') + '; exposure time ' + span(c.exposureTime) + '; frame rate ' + span(c.fps) + '; width ' + span(c.w) + '; height ' + span(c.h) + '; zoom ' + span(c.zoom),
+      'Tracker: ' + L.trk[0] + (N.gpuSwitched ? '; switched from GPU to CPU (GPU too slow)' : '') + '; from ' + (N.source || '-') + '; GPU name: ' + (N.gpu || 'unknown'),
+      'Delay: ' + L.lag[0] + '; capture time ' + N.capTime + '; waiting before the tracker ' + r0(N.waitMs) + ' ms',
+      'Hands now: ' + L.hand[0],
+      'Swipes: ' + L.swipe[0],
+      'Steadiness (still hand, fingertip): ' + L.shake[0],
+      'Screen: ' + L.scr[0],
+      'Settings: difficulty ' + N.settings.diff + ', cut sensitivity ' + N.settings.sens + ', cut with ' + N.settings.cutWith + ', camera picture ' + N.settings.camView
+    ].join('\n');
+  }
+  function copyByCommand(text) { // older way, for when the clipboard API is missing or refused
+    let ok = false;
+    try {
+      const ta = document.createElement('textarea');
+      ta.value = text; ta.setAttribute('readonly', ''); ta.style.cssText = 'position:fixed;left:0;top:0;opacity:0;-webkit-user-select:text;user-select:text';
+      document.body.appendChild(ta); ta.select();
+      ok = document.execCommand('copy');
+      ta.remove();
+    } catch (e) { ok = false; }
+    return ok;
+  }
+  async function copyReport() {
+    const text = buildReport();
+    let ok = false;
+    try { if (navigator.clipboard && navigator.clipboard.writeText) { await navigator.clipboard.writeText(text); ok = true; } } catch (e) { ok = false; }
+    if (!ok) ok = copyByCommand(text);
+    el.checkText.value = text;
+    el.checkText.hidden = ok;
+    el.checkNote.textContent = ok ? 'Report copied. Paste it into a message to send it.' : 'Could not copy. Select the text below and copy it, or take a screenshot.';
+    if (!ok) try { el.checkText.focus({ preventScroll: true }); el.checkText.select(); } catch (e) { /* ignore */ }
+    return ok;
+  }
 
   // ================================================================ update
   function stepItems(dt) {
@@ -2243,6 +2511,7 @@ body.cam-on.cam-hidden #tint { background: var(--cart); }
     if (state === 'over' && !resultsShown && t - overAt >= 1.0) showResults();
     checkLight(t);
     updateHints(t);
+    if (state === 'check') renderCheck(false);
   }
 
   // ================================================================ render
@@ -2391,6 +2660,28 @@ body.cam-on.cam-hidden #tint { background: var(--cart); }
       }
     }
   }
+  const BONES = [[0, 1], [1, 2], [2, 3], [3, 4], [0, 5], [5, 6], [6, 7], [7, 8], [5, 9], [9, 10], [10, 11], [11, 12], [9, 13], [13, 14], [14, 15], [15, 16], [13, 17], [17, 18], [18, 19], [19, 20], [0, 17]];
+  const CUT_IDX = new Set(CUT_POINTS.map((c) => c[1]));
+  function drawSkeleton(t) { // tracking check: the tracker's own points (not smoothed); the cursor ring is the smoothed fingertip
+    const keep = Math.max(0.25, detInterval * 3);
+    ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+    for (const h of hands) {
+      if (!h.lm || t - h.recv > keep) continue;
+      const P = h.lm.map((p) => toScreen(p[0], p[1]));
+      for (const [w, col] of [[6, 'rgba(26,11,28,0.6)'], [2.5, 'rgba(127,216,255,0.95)']]) {
+        ctx.lineWidth = w; ctx.strokeStyle = col; ctx.beginPath();
+        for (const [a, b] of BONES) { ctx.moveTo(P[a].x, P[a].y); ctx.lineTo(P[b].x, P[b].y); }
+        ctx.stroke();
+      }
+      for (let i = 0; i < P.length; i++) {
+        const cut = CUT_IDX.has(i);
+        ctx.fillStyle = 'rgba(26,11,28,0.7)'; ctx.beginPath(); ctx.arc(P[i].x, P[i].y, cut ? 6.5 : 4.5, 0, TAU); ctx.fill();
+        ctx.fillStyle = cut ? '#ffb81f' : '#fff4e0'; ctx.beginPath(); ctx.arc(P[i].x, P[i].y, cut ? 4.5 : 3, 0, TAU); ctx.fill();
+      }
+      const info = handInfo(h);
+      drawLabel(Math.round(info.size * 100) + '%', clamp(P[0].x, 40, W - 40), clamp(P[0].y + 28, 20, H - 20), 18, false, info.size < SMALL_HAND ? '#7fd8ff' : '#fff4e0');
+    }
+  }
   function drawCountdown() {
     const cd = state === 'countdown' || (state === 'paused' && stateBeforePause === 'countdown');
     if (!cd) return;
@@ -2405,6 +2696,7 @@ body.cam-on.cam-hidden #tint { background: var(--cart); }
     if (shake > 0) { const a = shake * 22; ctx.translate(vrnd(-a, a), vrnd(-a, a)); }
     drawSplats(); drawItems(t); drawHalves(); drawParticles(); drawTargets(t); drawMarks(); drawTexts();
     ctx.restore();
+    if (state === 'check') drawSkeleton(t);
     drawBlades(t, frameDt || 1 / 60);
     drawCountdown();
     if (flash > 0) { ctx.fillStyle = 'rgba(255,236,214,' + (flash * (reducedMotion ? 0.25 : 0.55)).toFixed(3) + ')'; ctx.fillRect(0, 0, W, H); }
@@ -2435,7 +2727,7 @@ body.cam-on.cam-hidden #tint { background: var(--cart); }
   }
 
   // ================================================================ wiring
-  $('btn-camera').addEventListener('click', enableCamera);
+  $('btn-camera').addEventListener('click', () => { afterCamera = 'menu'; enableCamera(); });
   $('btn-pointer').addEventListener('click', startPointerMode);
   $('btn-retry').addEventListener('click', enableCamera);
   $('btn-err-pointer').addEventListener('click', startPointerMode);
@@ -2456,7 +2748,12 @@ body.cam-on.cam-hidden #tint { background: var(--cart); }
     toast('Progress reset', 'Scores, stats and unlocks were deleted.');
     if (state === 'menu') showMenu();
   });
-  el.useCamBtn.addEventListener('click', enableCamera);
+  el.useCamBtn.addEventListener('click', () => { afterCamera = 'menu'; enableCamera(); });
+  $('btn-check').addEventListener('click', openCheck);
+  $('btn-check-copy').addEventListener('click', copyReport);
+  $('btn-check-reset').addEventListener('click', () => { resetDiag(); renderCheck(true); el.checkText.hidden = true; el.checkNote.textContent = 'Numbers reset. Swipe a few times.'; });
+  $('btn-check-done').addEventListener('click', showMenu);
+  $('check-x').addEventListener('click', showMenu);
   el.pauseBtn.addEventListener('click', pauseGame);
   el.soundBtn.addEventListener('click', toggleMute);
   window.addEventListener('keydown', (e) => {
@@ -2464,6 +2761,7 @@ body.cam-on.cam-hidden #tint { background: var(--cart); }
     // a focused, visible button or input keeps its own Space/Enter behaviour
     const k = e.key, onControl = !!e.target && /^(BUTTON|INPUT)$/.test(e.target.tagName) && e.target.getClientRects().length > 0;
     if (k === 'Escape' && panelOpen()) { if (!el.settings.hidden) closeSettings(); else closeProgress(); e.preventDefault(); return; }
+    if (k === 'Escape' && state === 'check') { showMenu(); e.preventDefault(); return; }
     if (k === ' ' || k === 'p' || k === 'P' || k === 'Escape') {
       if (onControl && k === ' ') return;
       if (panelOpen()) return;
@@ -2504,6 +2802,7 @@ body.cam-on.cam-hidden #tint { background: var(--cart); }
   window.__fsBack = () => {
     if (!el.settings.hidden) { closeSettings(); return true; }
     if (!el.progressPanel.hidden) { closeProgress(); return true; }
+    if (state === 'check') { showMenu(); return true; }
     if (state === 'playing' || state === 'countdown') { pauseGame(); return true; }
     if (state === 'paused' || state === 'over' || state === 'error') { showMenu(); return true; }
     if (state === 'loading') return true;
@@ -2536,6 +2835,12 @@ body.cam-on.cam-hidden #tint { background: var(--cart); }
       raw: () => lastRaw,
       feedOnly(on) { feedOnly = !!on; hands.forEach((h) => endHand(h)); hands = []; },
       setVideoSize(w, h) { videoSizeOverride = w ? { w, h } : null; },
+      check: () => openCheck(),
+      checkNumbers: () => checkNumbers(true),
+      report: () => buildReport(),
+      copyReport: () => copyReport(),
+      resetDiag: () => resetDiag(),
+      refreshCheck: () => renderCheck(true),
       async feed(img, t) { // run the real hand model on one picture, as if it were the next camera frame at time t
         if (!tracker.ready) return null;
         const r = await tracker.detect(img, nextTs());
@@ -2564,7 +2869,9 @@ body.cam-on.cam-hidden #tint { background: var(--cart); }
           pchips: POWER_IDS.filter((p) => !el.pchips[p].root.hidden), livesShown: !el.lives.hidden, livesLost: el.lives.querySelectorAll('.lost').length,
           pauseBtn: !el.pauseBtn.hidden, errTitle: el.errTitle.textContent, chipText: el.chipText.textContent, resTitle: el.resTitle.textContent,
           resScore: el.resScore.textContent, resNew: !el.resNew.hidden, resExtra: el.resExtra.textContent, loadCam: el.loadCam.textContent,
-          loadTrk: el.loadTrk.textContent, introNote: el.introNote.textContent, camHidden: document.body.classList.contains('cam-hidden')
+          loadTrk: el.loadTrk.textContent, introNote: el.introNote.textContent, camHidden: document.body.classList.contains('cam-hidden'),
+          check: !el.check.hidden, checkTip: el.checkTip.hidden ? '' : el.checkTip.textContent, checkRow: !el.checkRow.hidden, checkNote: el.checkNote.textContent,
+          checkText: !el.checkText.hidden, checkRows: Object.fromEntries(CHECK_ROWS.map(([k]) => [k, checkCells[k].textContent]))
         }
       })
     };

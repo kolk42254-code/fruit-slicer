@@ -100,6 +100,20 @@ async def suite(width, height, mobile, R):
         s = await snap(page)
         R.check(f'[{dev}] Escape closes Settings', not s['ui']['settings'] and s['state'] == 'menu')
 
+        # ---------------------------------------------------------------- tracking check button (this browser has no camera)
+        await page.click('#btn-settings')
+        s = await snap(page)
+        R.check(f'[{dev}] Settings from the menu has "Check hand tracking"', s['ui']['checkRow'] and await page.is_visible('#btn-check'))
+        await page.click('#btn-check')
+        await page.wait_for_function("['error', 'check'].includes(window.__FS.snap().state)", timeout=30000)
+        s = await snap(page)
+        R.check(f'[{dev}] tracking check with no camera: Settings closes, clear camera message, no check screen',
+                s['state'] == 'error' and not s['ui']['settings'] and s['ui']['errTitle'] in ('No camera found', 'Camera did not start') and not s['ui']['check'] and not s['ui']['checkTip'], s['ui']['errTitle'])
+        await page.click('#btn-err-pointer')
+        await tick(page, 0.5)
+        s = await snap(page)
+        R.check(f'[{dev}] "Play with mouse or touch" goes back to the menu', s['state'] == 'menu' and s['inputMode'] == 'pointer' and not s['ui']['check'] and s['ui']['menuBar'] and len(s['targets']) == 3)
+
         # ---------------------------------------------------------------- tap Classic
         c = tg['classic']
         await click_or_tap(page, mobile, c['x'], c['y'])
@@ -281,6 +295,7 @@ async def suite(width, height, mobile, R):
         await page.click('#btn-pause-settings')
         s = await snap(page)
         R.check(f'[{dev}] Settings opens from the pause screen', s['ui']['settings'] and not s['ui']['pause'] and s['state'] == 'paused')
+        R.check(f'[{dev}] no "Check hand tracking" in the middle of a paused game', not s['ui']['checkRow'] and not await page.is_visible('#btn-check'))
         await page.click('#settings-done')
         s = await snap(page)
         R.check(f'[{dev}] closing Settings returns to the pause screen', not s['ui']['settings'] and s['ui']['pause'] and s['state'] == 'paused')
@@ -296,6 +311,10 @@ async def suite(width, height, mobile, R):
         await page.click('#btn-settings')
         r4 = await ev(page, '__FS.back()'); s = await snap(page)
         R.check(f'[{dev}] Back closes Settings first', r4 is True and not s['ui']['settings'] and s['state'] == 'menu')
+        await page.click('#btn-settings')
+        s = await snap(page)
+        R.check(f'[{dev}] "Check hand tracking" is back when Settings opens from the menu', s['ui']['checkRow'])
+        await page.click('#settings-done')
         await to_playing(page, 'classic')
         await page.click('#btn-pause'); await page.click('#btn-restart')
         s = await snap(page)

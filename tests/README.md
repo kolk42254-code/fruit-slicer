@@ -33,7 +33,7 @@ Logs and screenshots go to `tests/out/` (`r1_logic.log`, `r1_1280x720_menu.png`,
 | Command | What it checks |
 | --- | --- |
 | `python t2_logic.py r1 [desktop\|phone]` | rules, modes, power-ups, settings, progress, layout, pause/back, soak with a bot (controlled clock) |
-| `python t2_camera.py r1 [static,two,portrait,nohand,dark,asl,feed_sharp,feed_blur,feed_slow,gpu,noworker,nofileflag,app,live]` | real tracker: cursor on the fingertip (< 8 px), steadiness, swipes frame by frame, offline app files |
+| `python t2_camera.py r1 [static,two,portrait,nohand,dark,asl,feed_sharp,feed_blur,feed_slow,gpu,noworker,nofileflag,app,live,check,checklayout]` | real tracker: cursor on the fingertip (< 8 px), steadiness, swipes frame by frame, offline app files, the tracking check screen (numbers, skeleton, report copy, phone layout) |
 | `python t2_errors.py r1` | blocked/missing camera, offline, broken downloads, unplugged camera, app fallbacks |
 | `python t2_soak.py 4 r1` | 4 minutes live with the camera: frame rate, memory, tracker keeps answering |
 | `python shots_v2.py` | screenshots of every panel at 4 screen sizes |
