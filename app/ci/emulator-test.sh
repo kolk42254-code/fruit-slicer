@@ -1,15 +1,18 @@
 #!/usr/bin/env bash
 # Runs inside the Android emulator job. Tests the debug APK over the WebView DevTools connection,
-# then the real camera-permission dialog, then checks that the signed release APK installs and starts.
+# then the real camera-permission dialog, then checks that the signed release APK installs next to it and starts.
 set -u
-PKG=io.github.kolk42254code.fruitslicer
+PKG=io.github.kolk42254code.fruitslicer                    # release APK ("Fruit Slicer")
+TEST_PKG=$PKG.test                                        # debug APK ("Fruit Slicer TEST"): own ID, installs next to the real app
+ACTIVITY=io.github.kolk42254code.fruitslicer.MainActivity  # the activity class keeps this name in both
 OUT=ci-out
 mkdir -p "$OUT"
 : > "$OUT/results.txt"
 RC=0
 
 note() { echo "$1" | tee -a "$OUT/results.txt"; }
-running() { adb shell ps -A -o NAME 2>/dev/null | tr -d '\r' | grep -qx "$PKG"; }
+running() { adb shell ps -A -o NAME 2>/dev/null | tr -d '\r' | grep -qx "$1"; }
+installed() { adb shell pm list packages 2>/dev/null | tr -d '\r' | grep -qx "package:$1"; }
 devtools() {
   local s=""
   for i in $(seq 1 30); do
@@ -30,29 +33,53 @@ sleep 20
 note "android: $(adb shell getprop ro.build.version.release | tr -d '\r')"
 note "webview: $(adb shell dumpsys package com.google.android.webview | grep -m1 versionName | tr -d ' \r')"
 
+# 0) the two APKs: test app has its own ID and name, the release keeps the real ones
+BT="$(ls -d "${ANDROID_HOME:-/nonexistent}"/build-tools/* 2>/dev/null | sort -V | tail -1)"
+if [ -n "$BT" ] && [ -x "$BT/aapt2" ]; then
+  DBG="$("$BT/aapt2" dump badging dist/app-debug.apk 2>/dev/null)"
+  REL="$("$BT/aapt2" dump badging dist/app-release.apk 2>/dev/null)"
+  echo "$DBG" | grep -E "^package:|application-label:|launchable-activity:"
+  echo "$REL" | grep -E "^package:|application-label:|launchable-activity:"
+  if echo "$DBG" | grep -q "^package: name='$TEST_PKG'" && echo "$DBG" | grep -q "launchable-activity: name='$ACTIVITY'.*label='Fruit Slicer TEST'" \
+     && echo "$REL" | grep -q "^package: name='$PKG'" && echo "$REL" | grep -q "launchable-activity: name='$ACTIVITY'.*label='Fruit Slicer'"; then
+    note "PASS debug APK is $TEST_PKG named \"Fruit Slicer TEST\"; release APK is $PKG named \"Fruit Slicer\""
+  else
+    note "FAIL debug APK is $TEST_PKG named \"Fruit Slicer TEST\"; release APK is $PKG named \"Fruit Slicer\""
+    RC=1
+  fi
+else
+  note "note: aapt2 not found, APK names not checked"
+fi
+
 # 1) debug APK (WebView debugging on), camera permission granted at install
 adb install -r -g dist/app-debug.apk
 adb logcat -c
-adb shell am start -W -n "$PKG/.MainActivity"
+adb shell am start -W -n "$TEST_PKG/$ACTIVITY"
 sleep 8
 devtools
 node app/ci/cdp-test.mjs "$OUT" debug || RC=1
 
 # 2) the real camera permission dialog: permission taken away, then allowed in the dialog
-adb shell pm revoke "$PKG" android.permission.CAMERA
+adb shell pm revoke "$TEST_PKG" android.permission.CAMERA
 sleep 2
-adb shell am start -W -n "$PKG/.MainActivity"
+adb shell am start -W -n "$TEST_PKG/$ACTIVITY"
 sleep 8
 devtools
 node app/ci/cdp-test.mjs "$OUT" permission || RC=1
 adb exec-out screencap -p > "$OUT/native_debug_end.png"
 adb logcat -d > "$OUT/logcat_debug.txt"
 
-# 3) signed release APK: installs, starts, stays running, no crash
-adb uninstall "$PKG" >/dev/null
+# 3) signed release APK: installs next to the test app (still installed), starts, stays running, no crash
+adb shell am force-stop "$TEST_PKG"
 adb logcat -c
 if adb install -r dist/app-release.apk; then
-  adb shell am start -W -n "$PKG/.MainActivity"
+  if installed "$TEST_PKG" && installed "$PKG"; then
+    note "PASS release app installs next to the test app (both installed)"
+  else
+    note "FAIL release app installs next to the test app (both installed)"
+    RC=1
+  fi
+  adb shell am start -W -n "$PKG/$ACTIVITY"
   sleep 12
   adb exec-out screencap -p > "$OUT/native_release_start.png"
   echo "--- processes"; adb shell ps -A | grep -i fruit
@@ -60,7 +87,7 @@ if adb install -r dist/app-release.apk; then
   adb logcat -d > "$OUT/logcat_release.txt"
   echo "--- crash buffer"; adb logcat -d -b crash | tail -40
   echo "--- app log"; grep -iE "fruitslicer|AndroidRuntime|Capacitor|chromium" "$OUT/logcat_release.txt" | tail -40
-  if running && ! grep -q "FATAL EXCEPTION" "$OUT/logcat_release.txt"; then
+  if running "$PKG" && ! grep -q "FATAL EXCEPTION" "$OUT/logcat_release.txt"; then
     note "PASS release APK installs, starts and keeps running"
   else
     note "FAIL release APK installs, starts and keeps running"

@@ -6,7 +6,8 @@ import { execSync } from 'node:child_process';
 
 const OUT = process.argv[2] || 'ci-out';
 const MODE = process.argv[3] || 'debug';
-const PKG = 'io.github.kolk42254code.fruitslicer';
+const PKG = 'io.github.kolk42254code.fruitslicer.test';                // the debug APK ("Fruit Slicer TEST"): own ID
+const ACTIVITY = 'io.github.kolk42254code.fruitslicer.MainActivity';   // the activity class keeps its name
 const results = [];
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const log = (s) => { console.log(s); fs.appendFileSync(`${OUT}/results.txt`, s + '\n'); };
@@ -231,7 +232,7 @@ async function main() {
   try { log('top activity after Back: ' + adb('shell dumpsys activity activities | grep -m1 topResumedActivity').trim()); } catch (err) { /* grep found nothing */ }
   try { log('app lifecycle: ' + adb('shell "logcat -d -s Capacitor:D | tail -6"').replace(/\s+/g, ' ').slice(-400)); } catch (err) { /* no log */ }
   check('Back in the menu leaves the app and turns the camera off', away.tracks === 0 && away.asleep === true, JSON.stringify(away));
-  adb(`shell am start -n ${PKG}/.MainActivity`);
+  adb(`shell am start -n ${PKG}/${ACTIVITY}`);
   await sleep(7000);
   const back = await cdp.eval('({ hidden: document.hidden, tracks: __FS.snap().camTracks, camOn: __FS.snap().camOn, state: __FS.snap().state })');
   check('opening the app again turns the camera back on', back.hidden === false && back.tracks === 1 && back.camOn, JSON.stringify(back));

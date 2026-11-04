@@ -103,7 +103,11 @@ no camera, offline, broken downloads, unplugged camera, app fallbacks), `t2_soak
 Last results on v2.0.0: round 1 = 279/279, round 2 = 292/292, emulator = 26/26.
 
 **Android app / CI:** push to a branch `app-<name>` → GitHub Actions builds the APK and runs the emulator test
-(Android 14, WebView 113). Read results with
+(Android 14, WebView 113). Two APKs come out: the release APK (`io.github.kolk42254code.fruitslicer`, "Fruit Slicer";
+signed with the permanent key only on `main`, a one-time key elsewhere) and the debug APK
+(`io.github.kolk42254code.fruitslicer.test`, "Fruit Slicer TEST", set in `app/android/app/build.gradle`), which installs
+next to the real app, so the owner can try a test build without uninstalling. The activity class stays
+`io.github.kolk42254code.fruitslicer.MainActivity` in both (use the full name with `am start`). Read results with
 `gh api repos/kolk42254-code/fruit-slicer/actions/jobs/<job-id>/logs`; the emulator job prints small screenshots as
 base64 JPEG between `SHOT-BEGIN` and `SHOT-END` lines. Artifacts (APKs, screenshots) are also on the run page.
 

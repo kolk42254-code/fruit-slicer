@@ -525,6 +525,8 @@ async def check_case(p, R):
     # frame by frame with the real tracker and a controlled clock (30 fps)
     s = await reopen_check(page)
     await page.evaluate("__FS.feedOnly(true); __FS.setVideoSize(640, 480); __FS.manual(true); __FS.resetDiag()")
+    await page.wait_for_timeout(2500)   # a live camera frame may still be in the tracker: let it come back, then clear again
+    await fresh(page)
     log = await seq(page, frames('swipe_sharp', 0, 17))
     N = await page.evaluate('__FS.checkNumbers()')
     R.check('[check] still hand: shake measured and small (< 2 px), the cursor shakes less, no jumps, no swipes',
