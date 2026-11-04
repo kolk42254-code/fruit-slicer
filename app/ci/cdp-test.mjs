@@ -135,7 +135,7 @@ async function main() {
   if (MODE === 'debug') {
     check('start screen is shown', await cdp.eval("!document.getElementById('intro').hidden"));
     check('app page is set to the bundled (offline) tracker files', (await cdp.eval("document.querySelector('meta[name=fs-assets]').content")) === 'local');
-    const cam = await cdp.eval("({ poster: document.getElementById('cam').poster.slice(0, 15), opacity: getComputedStyle(document.getElementById('cam')).opacity })");
+    const cam = await cdp.eval("({ poster: document.getElementById('cam').poster.slice(0, 14), opacity: getComputedStyle(document.getElementById('cam')).opacity })");
     check('no grey video placeholder before the camera starts', cam.poster === 'data:image/gif' && cam.opacity === '0', JSON.stringify(cam));
     const info = await cdp.eval(`({ ua: navigator.userAgent, w: innerWidth, h: innerHeight, dpr: devicePixelRatio,
       cssTop: getComputedStyle(document.documentElement).getPropertyValue('--safe-area-inset-top'),
@@ -196,9 +196,14 @@ async function main() {
   s = await cdp.eval('__FS.snap()');
   check('Back again goes to the menu', s.state === 'menu', s.state);
   adb('shell input keyevent KEYCODE_BACK');
-  await sleep(3000);
+  let away = null;
+  for (let i = 0; i < 20; i++) { // up to 10 s
+    await sleep(500);
+    away = await cdp.eval('({ hidden: document.hidden, tracks: __FS.snap().camTracks, asleep: __FS.snap().camAsleep })');
+    if (away.asleep) { away.after = (i + 1) * 0.5 + ' s'; break; }
+  }
   try { log('top activity after Back: ' + adb('shell dumpsys activity activities | grep -m1 topResumedActivity').trim()); } catch (err) { /* grep found nothing */ }
-  const away = await cdp.eval('({ hidden: document.hidden, tracks: __FS.snap().camTracks, asleep: __FS.snap().camAsleep })');
+  try { log('app lifecycle: ' + adb('shell "logcat -d -s Capacitor:D | tail -6"').replace(/\s+/g, ' ').slice(-400)); } catch (err) { /* no log */ }
   check('Back in the menu leaves the app and turns the camera off', away.tracks === 0 && away.asleep === true, JSON.stringify(away));
   adb(`shell am start -n ${PKG}/.MainActivity`);
   await sleep(7000);

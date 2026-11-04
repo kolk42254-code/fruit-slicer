@@ -37,14 +37,26 @@ public class MainActivity extends BridgeActivity {
         });
     }
 
-    // When the app leaves the screen, tell the game (it pauses and turns the camera off) and pause the WebView.
-    // When the app comes back, resume the WebView and tell the game (it turns the camera back on).
+    // Leaving the app (Home, Back in the menu, a call, another app): tell the game at once, so it pauses and
+    // turns the camera off. Coming back: tell the game, so it turns the camera back on.
+    @Override
+    public void onPause() {
+        super.onPause();
+        tellGame(true);
+    }
+
+    @Override
+    public void onResume() {
+        super.onResume();
+        tellGame(false);
+    }
+
+    // Not on screen any more: also pause the WebView itself (animations, page visibility).
     @Override
     public void onStop() {
         super.onStop();
         WebView webView = getBridge() != null ? getBridge().getWebView() : null;
         if (webView != null) {
-            webView.evaluateJavascript("window.__fsAppHidden&&window.__fsAppHidden(true)", null);
             webView.onPause();
         }
     }
@@ -55,7 +67,13 @@ public class MainActivity extends BridgeActivity {
         WebView webView = getBridge() != null ? getBridge().getWebView() : null;
         if (webView != null) {
             webView.onResume();
-            webView.evaluateJavascript("window.__fsAppHidden&&window.__fsAppHidden(false)", null);
+        }
+    }
+
+    private void tellGame(boolean away) {
+        WebView webView = getBridge() != null ? getBridge().getWebView() : null;
+        if (webView != null) {
+            webView.evaluateJavascript("window.__fsAppHidden&&window.__fsAppHidden(" + away + ")", null);
         }
     }
 }
