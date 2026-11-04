@@ -1,0 +1,6 @@
+# test downloads and generated files (see tests/README.md)
+tests/vendor/
+tests/videos/
+tests/out/
+__pycache__/
+*.pyc

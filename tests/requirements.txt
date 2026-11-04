@@ -1,0 +1,5 @@
+playwright>=1.48
+pillow
+numpy
+opencv-python
+mediapipe>=0.10.14

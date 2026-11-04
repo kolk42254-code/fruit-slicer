@@ -57,7 +57,11 @@ The Android app has the hand tracker built in. The app turns the camera off when
 
 | Path | What it is |
 | --- | --- |
-| `index.html` | The whole game in one file (served by GitHub Pages). |
+| `src/game.template.html` | The game source. Edit this, then run `python tools/build.py`. |
+| `index.html` | The built game in one file (served by GitHub Pages and copied into the app). Do not edit by hand. |
+| `tools/` | `build.py` (builds `index.html`), `make_icons.py` (app icon and start screens). |
+| `tests/` | The test system (Playwright + Chrome + fake camera videos). See `tests/README.md`. |
+| `CLAUDE.md`, `docs/NEXT_STEPS.md` | Notes and the next plan for continuing the work with Claude Code. |
 | `app/` | The Android app, made with [Capacitor](https://capacitorjs.com/). It wraps `index.html`. |
 | `app/scripts/prepare-www.mjs` | Copies the game and the hand tracker (code + model) into the app, so it runs offline. |
 | `app/android/` | The Android project (icon, start screen, Back button, keep-screen-on). |
