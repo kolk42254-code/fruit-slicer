@@ -89,7 +89,7 @@ async def suite(width, height, mobile, R):
         # ---------------------------------------------------------------- settings panel (default values, blocking cuts)
         await page.click('#btn-settings')
         s = await snap(page)
-        R.check(f'[{dev}] Settings opens with saved values', s['ui']['settings'] and await page.is_checked('#diff-normal') and await page.is_checked('#sens-normal') and await page.is_checked('#cut-hand') and await page.is_checked('#cam-show') and await page.is_checked('#hands-1'))
+        R.check(f'[{dev}] Settings opens with saved values', s['ui']['settings'] and await page.is_checked('#diff-normal') and await page.is_checked('#sens-normal') and await page.is_checked('#cut-hand') and await page.is_checked('#cam-show') and await page.is_checked('#hands-1') and await page.is_checked('#exp-auto'))
         a = tg['arcade']
         await swipe_through(page, a['x'], a['y'], half=a['r'] * 2)
         await tick(page, 0.6)
@@ -424,6 +424,28 @@ async def suite(width, height, mobile, R):
         await tick(page, 40, dt=1 / 30)
         s = await snap(page)
         R.check(f'[{dev}] Classic with no input: ends by misses, no power-ups', s['state'] == 'over' and s['stats']['powerSpawned'] == p0)
+
+        # ---------------------------------------------------------------- curved cut for camera strokes (the tracker gives few points)
+        s = await to_playing(page, 'classic')
+        await ev(page, '__FS.spawning(false); __FS.clearItems()')
+        M = s['MIN']; rad = 0.45 * M; ccx = s['W'] / 2; ccy = rad + 0.12 * M
+        arc = lambda deg: [ccx + rad * math.cos(math.radians(deg)), ccy - rad * math.sin(math.radians(deg))]
+        three = [arc(180), arc(90), arc(0)]          # a half-circle swipe seen as only 3 points, 0.1 s apart
+        stroke = "([id, pts, dt]) => { const t0 = __FS.now(); pts.forEach(([x, y], i) => __FS.point(id, x, y, t0 + i * dt)); __FS.end(id); }"
+        fx, fy = arc(45)                             # on the real curve, far from the straight lines
+        await ev(page, f"__FS.spawn({{type:'apple', x:{fx}, y:{fy}, frozen:true}})")
+        await ev(page, stroke, ['p77', three, 0.1]); await tick(page, 0.3)
+        s1 = await snap(page)
+        await ev(page, stroke, ['c901t', three, 0.1]); await tick(page, 0.3)
+        s2 = await snap(page)
+        R.check(f'[{dev}] curved cut: a fruit on the curve between far-apart points is missed by straight lines (mouse) but cut by a camera stroke',
+                s1['score'] == 0 and len(s1['items']) == 1 and s2['score'] == 1 and len(s2['items']) == 0, f"mouse score {s1['score']}, camera score {s2['score']}")
+        bx, by = ccx + 0.5 * rad, ccy - 0.75 * rad   # exactly on the curve the game draws, off the straight line
+        await ev(page, f"__FS.spawn({{kind:'bomb', x:{bx}, y:{by}, frozen:true}})")
+        await ev(page, stroke, ['c902t', three, 0.1]); await tick(page, 0.3)
+        s3 = await snap(page)
+        R.check(f'[{dev}] curved cut never sets off a bomb (bombs only on the real straight path)', s3['lives'] == 3 and len(s3['items']) == 1, f"lives {s3['lives']}")
+        await ev(page, '__FS.clearItems()')
 
         # ---------------------------------------------------------------- settings change the game
         await ev(page, '__FS.menu()')

@@ -66,7 +66,8 @@ hand tracker, sound and music, UI, update, render, main loop, wiring (test hooks
   as Blobs → a Web Worker made from `workerMain` (no network inside the worker). Falls back to the main thread.
   Asset sets: website = jsDelivr → unpkg (code), Google Storage `/1` → `/latest` (model); app = local files first.
   `preferredDelegate()` picks CPU for software GPUs. **Speed test** (`speedStartup` / `speedTestAll`): uses the saved
-  choice (`localStorage` `fruitSlicer.tracker`, same browser + game version) or times the worker GPU against the worker
+  choice (`localStorage` `fruitSlicer.tracker`) only for the same app version, build id (`BUILD_ID`, from the template's
+  SHA-256) and user agent (Chrome/WebView version); otherwise (`speed.why`) times the worker GPU against the worker
   CPU (skip 5 warm-up results, median of 10, ms from frame sent to result) and keeps the faster; the check screen's
   **Test** button also times the GPU on the page (kept only if 25% faster, it holds up drawing). Never swaps during a
   game. `tracker.watchdog()` still swaps a hung GPU worker for the CPU at once. The worker keeps one tracker per
@@ -76,6 +77,14 @@ hand tracker, sound and music, UI, update, render, main loop, wiring (test hooks
   `bladePoint`. One frame in flight at a time. `pollFrame` is the backup when frame callbacks stall.
 - **Camera request:** `frameRate {ideal 30, min 24}`; if refused (not a permission/no-camera error), asks again
   without `min` (`camAsk` says which).
+- **Camera exposure setting** (`expo`, `applyExposure`, `exposureStep`): Auto (default) or Sharp = `exposureMode
+  manual`, `exposureTime` 1/120 s (units of 100 µs) with ISO scaled to keep brightness; after each brightness check
+  ISO goes up/down first, exposure at most 1/60 s. "Not possible on this camera" when the track has no manual mode.
+- **Cursor lead** (`cursorLead`, display only): the camera cursor is drawn ahead along the last fingertip movement by
+  min(`LEAD_MAX` 80 ms, picture age), faded out below 0.2–0.6 × MIN px/s, capped at 12% of MIN.
+- **Curved cut** (`cutCurve`, camera strokes only): besides the straight segment, cuts along a parabola from the last
+  point to the new one with the Catmull-Rom slope at the last point (`CURVE_STEPS` pieces). Fruit and power-ups only;
+  bombs keep the straight-line rules.
 - **Camera picture:** `<video id="cam">`, mirrored, `object-fit: cover`; `toScreen()` uses the same cover maths.
   Transparent poster + invisible until the camera is on (Android shows a grey "play" picture otherwise).
 - **Leaving:** web `visibilitychange` (camera off after 3 s hidden); app `window.__fsAppHidden(true/false)` from

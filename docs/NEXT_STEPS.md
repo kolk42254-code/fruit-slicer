@@ -57,6 +57,13 @@ There is no way to see the phone from here, so the game must show its own number
 > 16 fps (asked 30); hand never lost in 11 swipes (blur is not the main problem now); shake 10.9 px at 4/s; drawing
 > 60 fps. **Step 1 built:** speed test (GPU vs CPU timed, page GPU from the check screen), Hands setting (1 by default,
 > about 19% faster here), camera asks for at least 24 fps. Next: owner runs "Test" in the check screen and sends a report.
+> **Step 2 built (owner's list, 5 Nov):** saved speed choice re-tested after a new app version, build or Chrome/WebView
+> (check screen shows "saved choice from: date, version"); cursor drawn ahead (display only, max 80 ms); curved cut
+> between tracker points (fruit only); Settings → Camera exposure: Auto / Sharp (1/120 s, ISO adjusted by brightness).
+> **Hands default rule (owner):** after two phone reports (Hands 1 and Hands 2), keep the one with fewer lost swipe
+> frames; equal → 1 hand; if the tracker is under 15 results/s and 2 hands loses fewer frames → 2 hands.
+> **Report reply format (owner):** results/s and ms per frame for GPU, CPU, page GPU; which was picked and why; lost
+> frames Hands 1 vs 2; delay and shake; what changes next and why.
 
 1. **Motion blur → hand lost during a fast swipe → no cut.** A small 1/4" f/2.2 selfie sensor needs long exposures
    indoors, so a fast hand becomes a blur and the tracker drops it.

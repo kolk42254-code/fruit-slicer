@@ -2,7 +2,7 @@
 """Build the game: src/game.template.html  ->  index.html (the website and the Android app use this file).
 
 The two OFL fonts in src/fonts are put inside the page as base64, so the page needs no font downloads.
-The app version (app/package.json) is written into the page, for the tracking report.
+The app version (app/package.json) and a build id (start of the template's SHA-256) are written into the page.
 Never edit index.html by hand: edit src/game.template.html, then run:
 
     python tools/build.py            # writes index.html
@@ -42,6 +42,10 @@ def build_html():
     if html.count('__GAME_VERSION__') != 1:
         sys.exit('placeholder __GAME_VERSION__ must be in the template exactly once')
     html = html.replace('__GAME_VERSION__', version)
+    # build id: changes with every change to the game source (a new TEST build re-runs the tracker speed test)
+    if html.count('__BUILD_ID__') != 1:
+        sys.exit('placeholder __BUILD_ID__ must be in the template exactly once')
+    html = html.replace('__BUILD_ID__', hashlib.sha256(open(SRC, 'rb').read()).hexdigest()[:8])
     left = re.findall(r'__[A-Z0-9_]{6,}__', html)
     if left:
         sys.exit(f'unfilled placeholders: {left}')

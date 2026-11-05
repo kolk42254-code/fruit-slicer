@@ -3,7 +3,7 @@ Mapping accuracy, still-hand steadiness, two hands, phone portrait, no hand, rea
 frame-by-frame swipes (sharp, blurred, slow tracker) with whole-hand and fingertip cutting, slow-GPU switch,
 main-thread fallback, the offline app files, a file opened straight from disk, and the tracking check screen
 (its numbers, skeleton, report copy, and layout on phones)."""
-import asyncio, json, math, os, pathlib, sys, time
+import asyncio, json, math, os, pathlib, re, sys, time
 from playwright.async_api import async_playwright
 from harness import *
 
@@ -359,7 +359,7 @@ async def app_case(p, R):
     await page.evaluate("__FS.menu(); __FS.check()")
     await page.wait_for_timeout(3000)
     rep = await page.evaluate('__FS.report()')
-    R.check('[app files] tracking check works in the app: report says app and local tracker files', f'Version {APP_VERSION} (app)' in rep and 'from local' in rep and 'hand 1: size' in rep, rep[:300])
+    R.check('[app files] tracking check works in the app: report says app and local tracker files', re.search(rf'Version {re.escape(APP_VERSION)} build [0-9a-f]{{8}} \(app\)', rep) and 'from local' in rep and 'hand 1: size' in rep, rep[:300])
     await br.close()
     srv.shutdown()
 
@@ -496,7 +496,7 @@ async def check_case(p, R):
     s = await snap(page)
     need = ('Camera: 640×480', 'asked for at least 24 fps', 'Speed test (', 'hands 1', 'Camera can: ', 'Tracker: ', 'Delay (camera to result): ', 'Hands now: hand 1: size ', 'Swipes: ', 'Steadiness', 'Screen: 1280×720', 'Settings: difficulty normal')
     R.check(f'[check] Copy report: report on the clipboard with version {APP_VERSION}, camera, tracker, delay, hand, swipes, screen, settings',
-            text.startswith('Fruit Slicer tracking report') and f'Version {APP_VERSION} (website)' in text and all(k in text for k in need), text[:400])
+            text.startswith('Fruit Slicer tracking report') and re.search(rf'Version {re.escape(APP_VERSION)} build [0-9a-f]{{8}} \(website\)', text) and all(k in text for k in need), text[:400])
     R.check('[check] says the report was copied', 'copied' in s['ui']['checkNote'] and not s['ui']['checkText'], s['ui']['checkNote'])
     await page.evaluate("window.__clip.mode = 'none'")
     await page.click('#btn-check-copy'); await page.wait_for_timeout(300)
@@ -687,8 +687,96 @@ async def speed_case(p, R):
     sp = await page.evaluate('__FS.speed()'); s = await snap(page)
     R.check('[speed] next start uses the saved choice (no new test) and tracks the hand', sp['source'] == 'saved' and not sp['running'] and sp['now'] == saved['choice'] and len(s['hands']) == 1,
             f"{sp['source']} {sp['now']} hands {len(s['hands'])}")
+    await page.evaluate('__FS.check()'); await wait_state(page, 'check'); await page.evaluate('__FS.refreshCheck()')
+    row = (await snap(page))['ui']['checkRows']['speed']
+    R.check('[speed] check screen says when the saved choice was made and for which version', 'saved choice from:' in row and 'version ' in row and '(build ' in row, row)
+    # a new game build (or app version, or Chrome/WebView version) makes the saved result old: not used, tested again
+    for field, value, why in (('build', '00000000', 'new game build'), ('v', '1.9.9', 'new app version'), ('ua', 'old browser', 'new Chrome/WebView')):
+        await page.evaluate("([f, v]) => { const s = JSON.parse(localStorage.getItem('fruitSlicer.tracker')); s[f] = v; localStorage.setItem('fruitSlicer.tracker', JSON.stringify(s)); }", [field, value])
+        await page.reload(); await page.wait_for_function('window.__FS !== undefined')
+        await start_camera(page)
+        sp = await page.evaluate('__FS.speed()')
+        R.check(f'[speed] saved result not used after a change ({why})', sp['source'] != 'saved' and sp['why'].startswith(why), f"{sp['source']} / {sp['why']}")
+        await page.evaluate("(c) => localStorage.setItem('fruitSlicer.tracker', c)", json.dumps(saved))
     errs = await page.evaluate('window.__FS_ERRORS || []')
     R.check('[speed] no frame errors', not errs, str(errs[:2]))
+    await br.close()
+
+
+async def lead_case(p, R):
+    """The camera cursor is drawn a little ahead along the hand's movement (display only), never when the hand is still."""
+    meta = json.load(open(f'{VIDEOS}/meta.json'))['swipe_sharp']
+    br = await launch(p, video='nohand')
+    ctx, page = await open_game(br, Net(), 1280, 720)
+    await start_camera(page)
+    await page.evaluate("__FS.feedOnly(true); __FS.setVideoSize(640, 480); __FS.manual(true)")
+    js = """async ([fr, idxs, dt]) => { const out = [];
+      for (const i of idxs) { const im = await new Promise((res) => { const x = new Image(); x.onload = () => res(x); x.src = fr + 'swipe_sharp/f' + String(i + 1).padStart(3, '0') + '.png'; });
+        await __FS.feed(im, __FS.now()); __FS.tick(dt, 1); const h = __FS.snap().hands[0]; out.push(h ? [i, h.sx, h.px, h.sy, h.py] : [i, null]); }
+      return out; }"""
+    log = await page.evaluate(js, [FR_URL, list(range(2, 40, 4)), 4 / 30])
+    s = await snap(page)
+    cap = 0.12 * s['MIN']
+    still = [l for l in log if l[1] is not None and (l[0] < 18 or l[0] >= 34)]
+    moving = [l for l in log if l[1] is not None and 18 <= l[0] <= 26]
+    R.check('[lead] still hand: cursor drawn exactly on the tracked point', still and all(abs(l[2] - l[1]) < 0.5 and abs(l[4] - l[3]) < 0.5 for l in still), str(still[:3]))
+    ahead = [l[1] - l[2] for l in moving]         # the finger moves to screen-left: ahead = smaller x
+    R.check('[lead] fast swipe: cursor drawn ahead in the direction of movement, never more than 12% of the screen',
+            moving and all(a > 5 for a in ahead) and all(a <= cap + 0.5 for a in ahead), f"ahead px {[round(a) for a in ahead]}, cap {cap:.0f}")
+    errs = await page.evaluate('window.__FS_ERRORS || []')
+    R.check('[lead] no frame errors', not errs, str(errs[:2]))
+    await br.close()
+
+EXPO_STUB = """(() => { window.__applied = [];
+  const md = navigator.mediaDevices, orig = md.getUserMedia.bind(md);
+  md.getUserMedia = async (c) => { const s = await orig(c); const tr = s.getVideoTracks()[0];
+    const gc = tr.getCapabilities.bind(tr), gs = tr.getSettings.bind(tr); let cur = { exposureTime: 333, iso: 200 };
+    tr.getCapabilities = () => Object.assign(gc(), { exposureMode: ['continuous', 'manual'], exposureTime: { min: 0.5, max: 2500, step: 0.1 }, iso: { min: 100, max: 3200, step: 1 } });
+    tr.getSettings = () => Object.assign(gs(), cur);
+    tr.applyConstraints = (x) => { window.__applied.push(JSON.parse(JSON.stringify(x))); const a = (x.advanced || [])[0] || {};
+      if (a.exposureTime) cur = { exposureTime: a.exposureTime, iso: a.iso || cur.iso }; return Promise.resolve(); };
+    return s; }; })();"""
+
+async def exposure_case(p, R):
+    """Settings > Camera exposure: Sharp = 1/120 s with matching ISO; the brightness check adjusts ISO; Auto goes back."""
+    for video in ('static_one', 'dark_one'):
+        br = await launch(p, video=video)
+        ctx, page = await open_game(br, Net(), 1280, 720, init_js=EXPO_STUB)
+        await start_camera(page)
+        s = await snap(page)
+        R.check(f'[exposure {video}] Auto by default: the camera is left alone', s['expo']['mode'] == 'auto' and not await page.evaluate('window.__applied.length'))
+        await page.evaluate("__FS.setSetting('exposure', 'sharp')")
+        await page.wait_for_timeout(500)
+        first = (await page.evaluate('window.__applied'))[0]['advanced'][0]
+        R.check(f'[exposure {video}] Sharp: manual 1/120 s, ISO raised to keep brightness (200 x 1/30 s -> about 800)',
+                first['exposureMode'] == 'manual' and abs(first['exposureTime'] - 1e4 / 120) < 0.01 and 780 <= first['iso'] <= 820, json.dumps(first))
+        await page.wait_for_timeout(8000)
+        s = await snap(page)
+        isos = [a['advanced'][0].get('iso') for a in await page.evaluate('window.__applied')]
+        if video == 'static_one':
+            R.check('[exposure bright] picture too bright: ISO lowered step by step, exposure stays 1/120 s', s['expo']['mode'] == 'manual' and isos[-1] < isos[0] and abs(s['expo']['time'] - 1e4 / 120) < 0.01,
+                    f"ISO {isos}, light {s['luma']}")
+        else:
+            R.check('[exposure dark] picture too dark: ISO raised step by step (up to the maximum)', s['expo']['mode'] == 'manual' and isos[-1] > isos[0] and max(isos) <= 3200,
+                    f"ISO {isos}, light {s['luma']}")
+        await page.evaluate('__FS.check()'); await wait_state(page, 'check')
+        rep = await page.evaluate('__FS.report()')
+        R.check(f'[exposure {video}] report shows the exposure', 'Exposure: Sharp 1/120 s' in rep and 'ISO 100-3200' in rep, [l for l in rep.split('\n') if 'xposure' in l][:2])
+        await page.evaluate("__FS.setSetting('exposure', 'auto')")
+        await page.wait_for_timeout(500)
+        s = await snap(page)
+        last = (await page.evaluate('window.__applied'))[-1]['advanced'][0]
+        R.check(f'[exposure {video}] back to Auto: camera exposure automatic again', s['expo']['mode'] == 'auto' and last == {'exposureMode': 'continuous'}, json.dumps(last))
+        await br.close()
+    br = await launch(p, video='static_one')
+    ctx, page = await open_game(br, Net(), 1280, 720)
+    await start_camera(page)
+    await page.evaluate("__FS.setSetting('exposure', 'sharp')")
+    await page.wait_for_timeout(3000)
+    s = await snap(page)
+    R.check('[exposure] camera without manual exposure: says so, keeps working', s['expo']['mode'] == 'auto' and 'not possible' in s['expo']['note'] and len(s['hands']) == 1, json.dumps(s['expo']))
+    bad = problems(page, MP_NOISE)
+    R.check('[exposure] console clean', not bad, ' | '.join(bad[:3]))
     await br.close()
 
 
@@ -700,6 +788,8 @@ async def main():
             'two': lambda: mapping_case(p, R, 'two_static', 1280, 720, False, init_js=HANDS2),
             'hands': lambda: hands_case(p, R),
             'speed': lambda: speed_case(p, R),
+            'lead': lambda: lead_case(p, R),
+            'exposure': lambda: exposure_case(p, R),
             'portrait': lambda: mapping_case(p, R, 'portrait_one', 412, 915, True),
             'nohand': lambda: nohand_case(p, R),
             'dark': lambda: dark_case(p, R),
