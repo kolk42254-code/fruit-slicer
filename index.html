@@ -256,7 +256,13 @@ body.cam-on.cam-hidden:not(.checking) #tint { background: var(--cart); }
 .check-rows { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 3px 12px; margin: 0; font-size: 14px; line-height: 1.35; }
 .check-rows dt { font-weight: 800; color: var(--mango); }
 .check-rows dd { margin: 0; font-weight: 600; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
-.check-rows dd.bad { color: var(--ice); }
+.check-rows .bad { color: var(--ice); }
+.check-rows .mini {
+  margin-left: 8px; min-height: 28px; padding: 1px 10px; border-radius: 8px; border: 1px solid var(--edge);
+  background: var(--bg-2); color: var(--mango); font: inherit; font-weight: 800; cursor: pointer;
+}
+.check-rows .mini:disabled { opacity: 0.5; cursor: default; }
+.check-rows .mini:focus-visible { outline: 3px solid var(--mango); outline-offset: 2px; }
 .check-card .actions { margin-top: 12px; gap: 8px; }
 .check-card .actions { flex-wrap: nowrap; }
 .check-card .actions .btn { flex: 1 1 auto; min-width: 0; white-space: nowrap; }
@@ -469,6 +475,13 @@ body.cam-on.cam-hidden:not(.checking) #tint { background: var(--cart); }
       </div>
       <p class="help">Bombs only go off from your fingertip either way.</p>
     </fieldset>
+    <fieldset class="seg"><legend>Hands (camera)</legend>
+      <div class="opts">
+        <label><input type="radio" name="hands" id="hands-1" value="1"><span>1 hand</span></label>
+        <label><input type="radio" name="hands" id="hands-2" value="2"><span>2 hands</span></label>
+      </div>
+      <p class="help">1 hand tracks faster. Choose 2 to cut with both hands.</p>
+    </fieldset>
     </div><div>
     <fieldset class="seg"><legend>Camera picture</legend>
       <div class="opts">
@@ -605,7 +618,7 @@ body.cam-on.cam-hidden:not(.checking) #tint { background: var(--cart); }
   }
 
   // ================================================================ settings & progress (saved on this device)
-  const DEFAULT_SETTINGS = { diff: 'normal', sens: 'normal', cutWith: 'hand', camView: 'show', sfx: 80, music: 50, muted: false };
+  const DEFAULT_SETTINGS = { diff: 'normal', sens: 'normal', cutWith: 'hand', camView: 'show', hands: 1, sfx: 80, music: 50, muted: false };
   function loadSettings() {
     let s = {};
     try { s = JSON.parse(store.get('fruitSlicer.settings', '{}')) || {}; } catch (e) { s = {}; }
@@ -614,6 +627,7 @@ body.cam-on.cam-hidden:not(.checking) #tint { background: var(--cart); }
     if (SENS[s.sens]) out.sens = s.sens;
     if (s.cutWith === 'hand' || s.cutWith === 'finger') out.cutWith = s.cutWith;
     if (s.camView === 'show' || s.camView === 'hide') out.camView = s.camView;
+    if (s.hands === 1 || s.hands === 2) out.hands = s.hands;
     if (isFinite(s.sfx)) out.sfx = clamp(Math.round(s.sfx), 0, 100);
     if (isFinite(s.music)) out.music = clamp(Math.round(s.music), 0, 100);
     if (typeof s.muted === 'boolean') out.muted = s.muted;
@@ -1469,14 +1483,16 @@ body.cam-on.cam-hidden:not(.checking) #tint { background: var(--cart); }
   // Runs inside a Web Worker so tracking and drawing don't wait for each other.
   // All files arrive as Blobs from the page, so the thread itself never touches the network.
   function workerMain() {
-    let V = null, fileset = null, model = null, lm = null, conf = null;
+    let V = null, fileset = null, model = null, conf = null, numHands = 1, lm = null;
+    const lms = {}; // one tracker per delegate (GPU, CPU), made when first used
     function make(dlg) {
       return V.HandLandmarker.createFromOptions(fileset, {
         baseOptions: { modelAssetBuffer: new Uint8Array(model.slice(0)), delegate: dlg },
-        runningMode: 'VIDEO', numHands: 2,
+        runningMode: 'VIDEO', numHands,
         minHandDetectionConfidence: conf[0], minHandPresenceConfidence: conf[1], minTrackingConfidence: conf[2]
       });
     }
+    async function use(dlg) { if (!lms[dlg]) lms[dlg] = await make(dlg); lm = lms[dlg]; }
     self.onmessage = async (e) => {
       const m = e.data;
       if (m.type === 'init') {
@@ -1485,11 +1501,19 @@ body.cam-on.cam-hidden:not(.checking) #tint { background: var(--cart); }
           V = self.Vision;
           if (!V || !V.HandLandmarker) throw new Error('Hand tracker script is missing parts');
           fileset = { wasmLoaderPath: URL.createObjectURL(m.loader), wasmBinaryPath: URL.createObjectURL(m.wasm) };
-          model = m.model; conf = m.conf;
+          model = m.model; conf = m.conf; numHands = m.numHands || 1;
           let dlg = m.delegate;
-          try { lm = await make(dlg); } catch (err) { if (dlg === 'CPU') throw err; dlg = 'CPU'; lm = await make('CPU'); }
+          try { await use(dlg); } catch (err) { if (dlg === 'CPU') throw err; dlg = 'CPU'; await use('CPU'); }
           self.postMessage({ type: 'ready', delegate: dlg });
         } catch (err) { self.postMessage({ type: 'error', message: String((err && err.message) || err) }); }
+      } else if (m.type === 'use') { // speed test: switch to the GPU or CPU tracker
+        try { await use(m.delegate); self.postMessage({ type: 'done', id: m.id, ok: true }); }
+        catch (err) { self.postMessage({ type: 'done', id: m.id, ok: false, message: String((err && err.message) || err) }); }
+      } else if (m.type === 'hands') { // how many hands to look for
+        numHands = m.numHands;
+        let ok = true;
+        for (const k of Object.keys(lms)) { try { await lms[k].setOptions({ numHands }); } catch (err) { ok = false; } }
+        self.postMessage({ type: 'done', id: m.id, ok });
       } else if (m.type === 'frame') {
         const t0 = performance.now();
         let hands = [], hd = [], ok = true, msg = '';
@@ -1504,7 +1528,7 @@ body.cam-on.cam-hidden:not(.checking) #tint { background: var(--cart); }
     };
   }
   const tracker = {
-    kind: '', ready: false, busy: false, busySince: 0, switching: false, delegate: '', worker: null, lm: null, seq: 0, waiting: null,
+    kind: '', ready: false, busy: false, busySince: 0, switching: false, delegate: '', worker: null, lm: null, mainLms: {}, seq: 0, waiting: null, calls: {}, numHands: 1,
     initWorker(files, delegatePref) {
       return new Promise((resolve, reject) => {
         let w;
@@ -1528,23 +1552,63 @@ body.cam-on.cam-hidden:not(.checking) #tint { background: var(--cart); }
           }
         };
         const copy = modelBytes.slice().buffer;
-        w.postMessage({ type: 'init', bundle: files.bundle, loader: files.loader, wasm: files.wasm, model: copy, delegate: delegatePref, conf: [0.5, 0.5, 0.5] }, [copy]);
+        this.numHands = settings.hands;
+        w.postMessage({ type: 'init', bundle: files.bundle, loader: files.loader, wasm: files.wasm, model: copy, delegate: delegatePref, conf: [0.5, 0.5, 0.5], numHands: settings.hands }, [copy]);
       });
     },
+    call(msg) { // a request to the thread, answered with { type: 'done', id, ok }
+      return new Promise((resolve) => {
+        const id = ++this.seq;
+        const timer = setTimeout(() => { delete this.calls[id]; resolve({ ok: false, message: 'no answer' }); }, 60000);
+        this.calls[id] = (m) => { clearTimeout(timer); resolve(m); };
+        try { this.worker.postMessage(Object.assign({}, msg, { id })); } catch (err) { this.calls[id]({ ok: false, message: String(err) }); }
+      });
+    },
+    failCalls() { for (const id of Object.keys(this.calls)) { const f = this.calls[id]; delete this.calls[id]; f({ ok: false, message: 'thread stopped' }); } },
     async initMain(files, delegatePref) {
+      await this.loadMain(files);
+      try { this.lm = await this.ensureMain(delegatePref); this.delegate = delegatePref; }
+      catch (err) { if (delegatePref === 'CPU') throw err; console.warn('Fruit Slicer: GPU hand tracking failed, using CPU.', err); this.lm = await this.ensureMain('CPU'); this.delegate = 'CPU'; }
+      this.kind = 'main'; this.ready = true;
+    },
+    async loadMain(files) { // the tracker on the page itself (no background thread)
       if (!window.Vision) await loadScript(URL.createObjectURL(files.bundle));
       const V = window.Vision;
       if (!V || !V.HandLandmarker) throw new Error('Hand tracker script is missing parts');
-      this.fileset = { wasmLoaderPath: URL.createObjectURL(files.loader), wasmBinaryPath: URL.createObjectURL(files.wasm) };
-      try { this.lm = await this.makeMain(delegatePref); this.delegate = delegatePref; }
-      catch (err) { if (delegatePref === 'CPU') throw err; console.warn('Fruit Slicer: GPU hand tracking failed, using CPU.', err); this.lm = await this.makeMain('CPU'); this.delegate = 'CPU'; }
-      this.kind = 'main'; this.ready = true;
+      if (!this.fileset) this.fileset = { wasmLoaderPath: URL.createObjectURL(files.loader), wasmBinaryPath: URL.createObjectURL(files.wasm) };
     },
+    async ensureMain(dlg) { if (!this.mainLms[dlg]) this.mainLms[dlg] = await this.makeMain(dlg); return this.mainLms[dlg]; },
     makeMain(dlg) {
+      this.numHands = settings.hands;
       return window.Vision.HandLandmarker.createFromOptions(this.fileset, {
-        baseOptions: { modelAssetBuffer: modelBytes.slice(), delegate: dlg }, runningMode: 'VIDEO', numHands: 2,
+        baseOptions: { modelAssetBuffer: modelBytes.slice(), delegate: dlg }, runningMode: 'VIDEO', numHands: settings.hands,
         minHandDetectionConfidence: 0.5, minHandPresenceConfidence: 0.5, minTrackingConfidence: 0.5
       });
+    },
+    async switchTo(kind, dlg) { // speed test: use the background or page tracker on the GPU or CPU; true when it worked
+      if (this.kind === kind && this.delegate === dlg) return true;
+      if (kind === 'worker' && !this.worker) return false;
+      this.switching = true;
+      try {
+        if (kind === 'worker') {
+          const r = await this.call({ type: 'use', delegate: dlg });
+          if (!r.ok) throw new Error(r.message || 'did not start');
+        } else {
+          await this.loadMain(this.files);
+          this.lm = await this.ensureMain(dlg);
+        }
+        this.kind = kind; this.delegate = dlg; resetDetectStats();
+        return true;
+      } catch (err) { console.warn('Fruit Slicer: hand tracker (' + kind + ', ' + dlg + ') did not start.', err); return false; }
+      finally { this.switching = false; }
+    },
+    async setHands(n) { // 1 hand is faster: with 2, the tracker keeps searching for a second hand
+      if (!this.ready || this.numHands === n) return;
+      this.numHands = n; this.switching = true;
+      try {
+        if (this.worker) await this.call({ type: 'hands', numHands: n });
+        for (const k of Object.keys(this.mainLms)) { try { await this.mainLms[k].setOptions({ numHands: n }); } catch (err) { /* keeps the old number */ } }
+      } finally { this.switching = false; }
     },
     detect(source, ts) { // one frame at a time; resolves with { ok, hands, took }
       if (this.kind === 'main') {
@@ -1568,17 +1632,21 @@ body.cam-on.cam-hidden:not(.checking) #tint { background: var(--cart); }
     watchdog() { // runs every animation frame: a very slow GPU is swapped for the CPU; a hung thread is reported
       if (this.kind !== 'worker' || !this.busy || trackingDead) return;
       const waited = performance.now() - this.busySince;
-      if (this.delegate === 'GPU' && !cpuFailed && !this.switching && waited > (detectCount >= 3 ? 1500 : 8000)) { slowGpuSwitch = true; this.switchToCpu(); }
+      if (this.delegate === 'GPU' && !cpuFailed && !this.switching && waited > (detectCount >= 3 ? 1500 : 8000)) { slowGpuSwitch = true; this.switchToCpu(); speedHung(); }
       if (waited > 45000) { trackingDead = true; console.warn('Fruit Slicer: hand tracker stopped answering.'); }
     },
     onWorkerMessage(m) {
       if (m.type === 'result') {
         if (this.waiting && this.waiting.id === m.id) { const w = this.waiting; this.waiting = null; w.resolve(m); }
+      } else if (m.type === 'done') {
+        const f = this.calls[m.id];
+        if (f) { delete this.calls[m.id]; f(m); }
       }
     },
     onWorkerCrash() {
       console.warn('Fruit Slicer: hand tracker thread stopped.');
       if (this.waiting) { const w = this.waiting; this.waiting = null; w.resolve({ ok: false, msg: 'thread stopped', hands: [], took: 0 }); }
+      this.failCalls();
       this.ready = false; trackingDead = true;
     },
     switchToCpu() {
@@ -1587,18 +1655,19 @@ body.cam-on.cam-hidden:not(.checking) #tint { background: var(--cart); }
       if (this.kind === 'worker') { // stop the busy thread at once and start a fresh one on the CPU
         try { this.worker.terminate(); } catch (e) { /* ignore */ }
         if (this.waiting) { const w = this.waiting; this.waiting = null; w.resolve({ ok: true, skip: true, hands: [], took: 0 }); }
+        this.failCalls();
         this.initWorker(this.files, 'CPU').then(() => resetDetectStats())
           .catch((err) => { console.warn('Fruit Slicer: CPU hand tracking failed.', err); cpuFailed = true; trackingDead = true; })
           .finally(() => { this.switching = false; });
         return;
       }
-      this.makeMain('CPU').then((lm) => { const old = this.lm; this.lm = lm; this.delegate = 'CPU'; try { if (old) old.close(); } catch (e) { /* ignore */ } resetDetectStats(); })
+      this.ensureMain('CPU').then((lm) => { this.lm = lm; this.delegate = 'CPU'; resetDetectStats(); })
         .catch((err) => { console.warn('Fruit Slicer: CPU hand tracking failed.', err); cpuFailed = true; if (detectFails >= 3) trackingDead = true; })
         .finally(() => { this.switching = false; });
     }
   };
 
-  let camOn = false, camStream = null, camStage = 'idle', modelBytes = null;
+  let camOn = false, camStream = null, camStage = 'idle', modelBytes = null, camAsk = '';
   let trackerPromise = null, trackerStage = 'idle', trackerProgress = 0, trackerSource = '';
   let lastTs = 0, detectFails = 0, detectMs = 0, detectCount = 0, detectHist = [], slowGpuSwitch = false, cpuFailed = false, gpuName = '';
   let handsSeenAt = -99, trackingDead = false, lastVideoTime = -1, rvfcOn = false, lastRvfcAt = 0, detInterval = 0.05, lastResultAt = 0;
@@ -1623,6 +1692,88 @@ body.cam-on.cam-hidden:not(.checking) #tint { background: var(--cart); }
     const all = diag.frames + diag.missed; // frames the page saw + frames it never got to see
     diag.camFps = (all - diag.rateFrames) / dt; diag.resFps = (diag.results - diag.rateResults) / dt;
     diag.rateAt = now; diag.rateFrames = all; diag.rateResults = diag.results; diag.rated = true;
+  }
+
+  // Speed test: which hand tracker answers fastest on this device? The GPU or CPU tracker in the background thread
+  // (and, from the tracking check, the GPU tracker on the page itself). For each: skip 5 warm-up results, then take
+  // the median of 10 (ms from sending a frame to its result). The fastest is kept and saved on this device until the
+  // browser or game version changes. Trackers are never swapped in the middle of a game.
+  const SPEED_KEY = 'fruitSlicer.tracker';
+  const BACKENDS = { 'worker GPU': ['worker', 'GPU'], 'worker CPU': ['worker', 'CPU'], 'main GPU': ['main', 'GPU'], 'main CPU': ['main', 'CPU'] };
+  const BACKEND_NAME = { 'worker GPU': 'GPU', 'worker CPU': 'CPU', 'main GPU': 'page GPU', 'main CPU': 'page CPU' };
+  const speed = { running: false, list: [], idx: -1, seen: 0, samples: [], results: {}, chosen: '', source: '', waitPlay: false, stepping: false };
+  const backendNow = () => tracker.kind + ' ' + tracker.delegate;
+  function chooseBackend(results) { // the fastest; the page GPU also holds up drawing, so it must be clearly faster
+    const ms = (k) => (typeof results[k] === 'number' ? results[k] : Infinity);
+    const best = (keys) => keys.reduce((a, k) => (ms(k) < ms(a) ? k : a), keys[0]);
+    const w = best(['worker GPU', 'worker CPU']), m = best(['main GPU', 'main CPU']);
+    if (ms(w) < Infinity && !(ms(m) < 0.75 * ms(w))) return w;
+    return ms(m) < Infinity ? m : '';
+  }
+  function speedStart(list, source) {
+    const now = backendNow();
+    const avail = list.filter((k) => BACKENDS[k][0] === 'main' || tracker.worker);
+    avail.sort((a, b) => (a === now ? -1 : b === now ? 1 : 0)); // the one in use first: no swap needed
+    Object.assign(speed, { running: true, list: avail, idx: -1, seen: 0, samples: [], results: {}, chosen: '', source, waitPlay: false, stepping: false });
+    speedStep();
+  }
+  function speedStep() {
+    if (!speed.running) return;
+    if (state === 'playing' || state === 'countdown') { speed.waitPlay = true; return; }
+    if (tracker.switching) { setTimeout(speedStep, 300); return; }
+    speed.waitPlay = false;
+    do speed.idx++; while (speed.idx < speed.list.length && speed.results[speed.list[speed.idx]] !== undefined);
+    if (speed.idx >= speed.list.length) { speedFinish(); return; }
+    const k = speed.list[speed.idx];
+    speed.stepping = true; speed.seen = 0; speed.samples = [];
+    tracker.switchTo(BACKENDS[k][0], BACKENDS[k][1]).then((ok) => {
+      speed.stepping = false;
+      if (!ok) { speed.results[k] = 'failed'; speedStep(); }
+    });
+  }
+  function speedSample(ms) { // every live tracker result
+    if (!speed.running || speed.stepping || speed.waitPlay || tracker.switching) return;
+    const k = speed.list[speed.idx];
+    if (!k || backendNow() !== k) return;
+    speed.seen++;
+    if (speed.seen <= 5) { // warm-up (the GPU builds its programs on the first frames)
+      if (tracker.kind === 'main' && ms > 3000) { speed.results[k] = 'too slow'; speedStep(); }
+      return;
+    }
+    if (ms > 1500) { speed.results[k] = 'too slow'; speedStep(); return; }
+    speed.samples.push(ms);
+    if (speed.samples.length >= 10) { speed.results[k] = medianOf(speed.samples); speedStep(); }
+  }
+  function speedHung() { // the background GPU tracker stopped answering and was replaced by the CPU one
+    if (speed.running && speed.list[speed.idx] === 'worker GPU') { speed.results['worker GPU'] = 'too slow'; speedStep(); }
+    else if (!speed.running && speed.chosen === 'worker GPU') { speed.chosen = 'worker CPU'; speed.results['worker GPU'] = 'too slow'; saveSpeed(); }
+  }
+  function speedFinish() {
+    speed.running = false;
+    let k = chooseBackend(speed.results);
+    if (!k) k = tracker.worker ? 'worker CPU' : 'main CPU';
+    speed.chosen = k;
+    if (BACKENDS[k][1] === 'CPU' && Object.keys(speed.results).some((x) => BACKENDS[x][1] === 'GPU')) slowGpuSwitch = true;
+    tracker.switchTo(BACKENDS[k][0], BACKENDS[k][1])
+      .then((ok) => { if (!ok) { speed.chosen = backendNow(); } saveSpeed(); });
+  }
+  function saveSpeed() {
+    store.set(SPEED_KEY, JSON.stringify({ ua: navigator.userAgent, v: GAME_VERSION, choice: speed.chosen, results: speed.results, at: Date.now() }));
+  }
+  function speedStartup(pref) { // after the tracker starts: use the saved choice, or time GPU against CPU
+    let saved = null;
+    try { saved = JSON.parse(store.get(SPEED_KEY, 'null')); } catch (e) { saved = null; }
+    if (saved && saved.ua === navigator.userAgent && saved.v === GAME_VERSION && BACKENDS[saved.choice]) {
+      speed.results = saved.results || {}; speed.chosen = saved.choice; speed.source = 'saved';
+      tracker.switchTo(BACKENDS[saved.choice][0], BACKENDS[saved.choice][1]).then((ok) => { if (!ok) speed.chosen = backendNow(); });
+      return;
+    }
+    if (pref !== 'GPU') { speed.source = 'skipped'; speed.chosen = backendNow(); return; } // software graphics: GPU known to be slow
+    speedStart(tracker.worker ? ['worker GPU', 'worker CPU'] : ['main GPU', 'main CPU'], 'auto');
+  }
+  function speedTestAll() { // from the tracking check: all three, measured now
+    store.set(SPEED_KEY, '');
+    speedStart(tracker.worker ? ['worker GPU', 'worker CPU', 'main GPU'] : ['main GPU', 'main CPU'], 'check');
   }
 
   function loadScript(src) {
@@ -1738,6 +1889,7 @@ body.cam-on.cam-hidden:not(.checking) #tint { background: var(--cart); }
           tracker.files = files;
           trackerSource = set.name + (simd ? '' : '-nosimd');
           trackerStage = 'ready'; trackingDead = false; resetDetectStats(); renderLoad();
+          speedStartup(pref);
           return tracker;
         } catch (err) { lastErr = err; console.warn('Fruit Slicer: hand tracker source "' + set.name + '" failed.', err); }
       }
@@ -1753,9 +1905,19 @@ body.cam-on.cam-hidden:not(.checking) #tint { background: var(--cart); }
       const e = new Error('Camera needs a secure page'); e.name = 'InsecureContext'; throw e;
     }
     // Laptops: ask for a light 640x480 picture. Tall phone screens: take the camera's own size (no square crop).
+    // Ask for at least 24 frames per second (some phones drop to 15 indoors); if the camera refuses, ask normally.
     const portrait = window.innerHeight > window.innerWidth;
-    const want = portrait ? { facingMode: 'user', frameRate: { ideal: 30 } } : { facingMode: 'user', width: { ideal: 640 }, height: { ideal: 480 }, frameRate: { ideal: 30 } };
-    const stream = await navigator.mediaDevices.getUserMedia({ audio: false, video: want });
+    const base = portrait ? { facingMode: 'user' } : { facingMode: 'user', width: { ideal: 640 }, height: { ideal: 480 } };
+    let stream;
+    try {
+      stream = await navigator.mediaDevices.getUserMedia({ audio: false, video: Object.assign({ frameRate: { ideal: 30, min: 24 } }, base) });
+      camAsk = 'at least 24 fps';
+    } catch (err) {
+      if (/NotAllowed|PermissionDenied|Security|NotFound|DevicesNotFound/.test((err && err.name) || '')) throw err;
+      console.warn('Fruit Slicer: the camera refused "at least 24 fps", asking normally.', err);
+      stream = await navigator.mediaDevices.getUserMedia({ audio: false, video: Object.assign({ frameRate: { ideal: 30 } }, base) });
+      camAsk = 'normal (at least 24 fps refused: ' + ((err && err.name) || 'error') + ')';
+    }
     camStream = stream;
     video.srcObject = stream;
     video.muted = true;
@@ -1927,16 +2089,12 @@ body.cam-on.cam-hidden:not(.checking) #tint { background: var(--cart); }
       const total = performance.now() - tCap * 1000;
       latencyMs = latencyMs * 0.8 + total * 0.2;
       diag.results++; diagPush(diag.total, total); diagPush(diag.took, r.took || 0);
-      if (sentMs) diagPush(diag.wait, sentMs - tCap * 1000);
+      if (sentMs) { diagPush(diag.wait, sentMs - tCap * 1000); speedSample(performance.now() - sentMs); }
     }
     if (detectCount > 3) {
       detectMs = detectMs ? detectMs * 0.85 + r.took * 0.15 : r.took;
       detectHist.push(r.took);
       if (detectHist.length > 15) detectHist.shift();
-      if (tracker.delegate === 'GPU' && !cpuFailed && (r.took > 1000 || detectHist.length >= 3)) {
-        const sorted = detectHist.slice().sort((a, b) => a - b), median = sorted[Math.floor(sorted.length / 2)];
-        if (r.took > 1000 || median > 300 || (detectHist.length >= 8 && median > 120)) { slowGpuSwitch = true; tracker.switchToCpu(); }
-      }
     }
     const lms = [], hds = [], hd = r.hd || [];
     (r.hands || []).forEach((h, i) => { if (h && h.length >= 21 && isFinite(h[8][0]) && isFinite(h[8][1])) { lms.push(h); hds.push(hd[i] || null); } });
@@ -2206,7 +2364,7 @@ body.cam-on.cam-hidden:not(.checking) #tint { background: var(--cart); }
   // settings panel
   let settingsFrom = 'menu';
   function syncSettingsForm() {
-    for (const k of ['diff', 'sens', 'cutWith', 'camView']) {
+    for (const k of ['diff', 'sens', 'cutWith', 'camView', 'hands']) {
       const r = document.querySelector('input[name="' + k + '"][value="' + settings[k] + '"]');
       if (r) r.checked = true;
     }
@@ -2232,13 +2390,14 @@ body.cam-on.cam-hidden:not(.checking) #tint { background: var(--cart); }
   }
   function applySettings() {
     document.body.classList.toggle('cam-hidden', settings.camView === 'hide');
+    if (tracker.ready && tracker.numHands !== settings.hands) tracker.setHands(settings.hands);
     applyVolumes();
     setMutedUI();
     Music.update();
   }
   document.querySelectorAll('#settings input[type="radio"]').forEach((r) => r.addEventListener('change', () => {
     if (!r.checked) return;
-    settings[r.name] = r.value; saveSettings(); applySettings();
+    settings[r.name] = r.name === 'hands' ? +r.value : r.value; saveSettings(); applySettings();
   }));
   for (const k of ['sfx', 'music']) {
     $('set-' + k).addEventListener('input', (e) => {
@@ -2299,13 +2458,17 @@ body.cam-on.cam-hidden:not(.checking) #tint { background: var(--cart); }
 
   // tracking check screen: camera picture + hand skeleton + live numbers, and a report to copy
   const SMALL_HAND = 0.12; // a hand smaller than this share of the picture width is far away (small = noisy)
-  const CHECK_ROWS = [['cam', 'Camera'], ['trk', 'Tracker'], ['lag', 'Delay'], ['hand', 'Hands'], ['swipe', 'Swipes'], ['shake', 'Steadiness'], ['scr', 'Screen']];
+  const CHECK_ROWS = [['cam', 'Camera'], ['trk', 'Tracker'], ['speed', 'Speed'], ['lag', 'Delay'], ['hand', 'Hands'], ['swipe', 'Swipes'], ['shake', 'Steadiness'], ['scr', 'Screen']];
   const checkCells = {};
   for (const [k, label] of CHECK_ROWS) {
-    const dt = document.createElement('dt'), dd = document.createElement('dd');
-    dt.textContent = label; dd.textContent = '…';
-    el.checkRows.append(dt, dd); checkCells[k] = dd;
+    const dt = document.createElement('dt'), dd = document.createElement('dd'), txt = document.createElement('span');
+    dt.textContent = label; txt.textContent = '…'; dd.append(txt);
+    el.checkRows.append(dt, dd); checkCells[k] = txt;
   }
+  el.speedBtn = document.createElement('button'); // the speed row also has a "Test" button: time GPU, CPU and page GPU now
+  el.speedBtn.type = 'button'; el.speedBtn.id = 'btn-speed'; el.speedBtn.className = 'mini'; el.speedBtn.textContent = 'Test';
+  el.speedBtn.setAttribute('aria-label', 'Test tracker speed');
+  checkCells.speed.parentNode.append(el.speedBtn);
   let afterCamera = 'menu', checkDrawnAt = 0;
   function openCheck() {
     el.settings.hidden = true; resetStrokes();
@@ -2346,6 +2509,9 @@ body.cam-on.cam-hidden:not(.checking) #tint { background: var(--cart); }
       resFps: diag.resFps, tookMs: medianOf(diag.took), totalMs: medianOf(diag.total), waitMs: medianOf(diag.wait),
       skippedPct: diag.frames ? (100 * diag.skipped) / diag.frames : 0, capTime: diag.capKnown + diag.capGuess === 0 ? 'none yet' : diag.capKnown >= diag.capGuess ? 'measured' : 'guessed',
       delegate: tracker.delegate || '-', kind: tracker.kind || '-', gpu: gpuName, source: trackerSource, dead: trackingDead, gpuSwitched: slowGpuSwitch,
+      speed: { running: speed.running, testing: speed.running ? speed.list[speed.idx] || '' : '', seen: speed.seen, samples: speed.samples.length,
+        results: Object.assign({}, speed.results), chosen: speed.chosen, source: speed.source, now: backendNow() },
+      camAsk, numHands: settings.hands,
       hands: hands.filter((h) => h.lm && t - h.recv <= keep).map(handInfo),
       swipes: diag.swipes, swipeFrames: diag.swipeFrames, swipeLost: diag.swipeLost, gapMs: diag.gapMax * 1000, broken: diag.broken,
       shakeRaw: diag.shakeRaw >= 0 ? Math.sqrt(diag.shakeRaw / 1.5) : null, shakeCursor: diag.shakeCursor >= 0 ? Math.sqrt(diag.shakeCursor / 1.5) : null, jumps: diag.jumps,
@@ -2355,12 +2521,23 @@ body.cam-on.cam-hidden:not(.checking) #tint { background: var(--cart); }
   const r0 = (v) => String(Math.round(v)), pct = (v) => Math.round(v) + '%';
   const rate = (N, v) => (N.rated ? r0(v) : '…'); // per-second numbers need about 1 s of counting
   const lightWord = (l) => (l < 0 ? 'not measured yet' : l < 48 ? 'too dark' : l < 80 ? 'dim' : 'good');
+  function speedLine(sp) { // e.g. "GPU 45 · CPU 177 · page GPU 60 ms → GPU"
+    if (sp.running) {
+      const k = sp.testing;
+      return 'testing ' + (BACKEND_NAME[k] || k) + '… ' + (sp.seen <= 5 ? 'warming up' : sp.samples + '/10');
+    }
+    const parts = Object.keys(sp.results).map((k) => (BACKEND_NAME[k] || k) + ' ' + (typeof sp.results[k] === 'number' ? r0(sp.results[k]) + ' ms' : sp.results[k]));
+    const now = BACKEND_NAME[sp.now] || sp.now;
+    if (!parts.length) return (sp.source === 'skipped' ? 'GPU not tried (software graphics)' : 'not tested') + ' → ' + now;
+    return parts.join(' · ') + ' → ' + now;
+  }
   function checkLines(N) { // one short line per row; bad = worth a closer look
     const hs = N.hands.map((x, i) => 'hand ' + (i + 1) + ': size ' + pct(x.size * 100) + (x.sure != null ? ', sure ' + pct(x.sure * 100) : ''));
     const lostPct = N.swipeFrames ? (100 * N.swipeLost) / N.swipeFrames : 0;
     return {
       cam: [N.video.w + '×' + N.video.h + ' · ' + rate(N, N.camFps) + ' fps · light ' + (N.luma < 0 ? '…' : r0(N.luma)) + ' (' + lightWord(N.luma) + ')', N.dark || (N.camFps > 0 && N.camFps < 20)],
       trk: [N.dead ? 'stopped' : rate(N, N.resFps) + ' results/s · ' + r0(N.tookMs) + ' ms · ' + N.delegate + ' · ' + (N.kind === 'worker' ? 'background' : 'main thread') + ' · ' + pct(N.skippedPct) + ' skipped', N.dead || (N.resFps > 0 && N.resFps < 15)],
+      speed: [speedLine(N.speed), false],
       lag: [r0(N.totalMs) + ' ms (' + (N.capTime === 'measured' ? 'camera timed' : N.capTime === 'guessed' ? 'estimated' : '…') + ') · tracker ' + r0(N.tookMs) + ' ms', N.totalMs > 150],
       hand: [hs.length ? hs.join(' · ') : 'no hand found', !hs.length || N.hands.some((x) => x.size < SMALL_HAND)],
       swipe: [N.swipes + ' swipes · lost ' + N.swipeLost + ' of ' + N.swipeFrames + ' frames · longest gap ' + r0(N.gapMs) + ' ms · ' + N.broken + ' broken', lostPct > 20 || N.broken > 0],
@@ -2379,6 +2556,7 @@ body.cam-on.cam-hidden:not(.checking) #tint { background: var(--cart); }
       if (checkCells[k].textContent !== L[k][0]) checkCells[k].textContent = L[k][0];
       checkCells[k].classList.toggle('bad', !!L[k][1]);
     }
+    el.speedBtn.disabled = speed.running || !tracker.ready;
     let tip = 'Swipe your hand a few times, then copy the report.', warn = true;
     if (N.dead) tip = 'Hand tracking stopped. Close this and turn the camera on again.';
     else if (N.dark) tip = 'Too dark: turn on a light so your hand tracks better.';
@@ -2397,15 +2575,16 @@ body.cam-on.cam-hidden:not(.checking) #tint { background: var(--cart); }
       'Fruit Slicer tracking report',
       'Version ' + N.version + ' (' + N.where + '), ' + d.getFullYear() + '-' + two(d.getMonth() + 1) + '-' + two(d.getDate()) + ' ' + two(d.getHours()) + ':' + two(d.getMinutes()) + ', numbers from the last ' + r0(N.secs) + ' s',
       'Device: ' + N.ua,
-      'Camera: ' + L.cam[0] + '; camera says ' + N.camSays.w + '×' + N.camSays.h + ' at ' + r0(N.camSays.fps) + ' fps; page missed ' + pct(N.missedPct) + ' of frames',
+      'Camera: ' + L.cam[0] + '; asked for ' + (N.camAsk || '-') + '; camera says ' + N.camSays.w + '×' + N.camSays.h + ' at ' + r0(N.camSays.fps) + ' fps; page missed ' + pct(N.missedPct) + ' of frames',
       'Camera can: exposure modes ' + (c.exposure.length ? c.exposure.join(', ') : 'not reported') + '; exposure time ' + span(c.exposureTime) + '; frame rate ' + span(c.fps) + '; width ' + span(c.w) + '; height ' + span(c.h) + '; zoom ' + span(c.zoom),
-      'Tracker: ' + L.trk[0] + (N.gpuSwitched ? '; switched from GPU to CPU (GPU too slow)' : '') + '; from ' + (N.source || '-') + '; GPU name: ' + (N.gpu || 'unknown'),
+      'Tracker: ' + L.trk[0] + (N.gpuSwitched ? '; switched from GPU to CPU (GPU measured slower)' : '') + '; from ' + (N.source || '-') + '; GPU name: ' + (N.gpu || 'unknown'),
+      'Speed test (ms from frame to result, lower is better; ' + ({ auto: 'tested at start', check: 'tested from this screen', saved: 'saved from an earlier test', skipped: 'not tested' }[N.speed.source] || 'not tested') + '): ' + speedLine(N.speed),
       'Delay (camera to result): ' + L.lag[0] + '; capture time ' + N.capTime + '; waiting before the tracker ' + r0(N.waitMs) + ' ms',
       'Hands now: ' + L.hand[0],
       'Swipes: ' + L.swipe[0] + ' (frames = tracker results while the fingertip moved fast)',
       'Steadiness (still hand, fingertip): ' + L.shake[0],
       'Screen: ' + L.scr[0],
-      'Settings: difficulty ' + N.settings.diff + ', cut sensitivity ' + N.settings.sens + ', cut with ' + N.settings.cutWith + ', camera picture ' + N.settings.camView
+      'Settings: difficulty ' + N.settings.diff + ', cut sensitivity ' + N.settings.sens + ', cut with ' + N.settings.cutWith + ', hands ' + N.settings.hands + ', camera picture ' + N.settings.camView
     ].join('\n');
   }
   function copyByCommand(text) { // older way, for when the clipboard API is missing or refused
@@ -2515,6 +2694,7 @@ body.cam-on.cam-hidden:not(.checking) #tint { background: var(--cart); }
     checkLight(t);
     updateHints(t);
     if (state === 'check') renderCheck(false);
+    if (speed.waitPlay && state !== 'playing' && state !== 'countdown') speedStep();
   }
 
   // ================================================================ render
@@ -2756,6 +2936,7 @@ body.cam-on.cam-hidden:not(.checking) #tint { background: var(--cart); }
   $('btn-check-copy').addEventListener('click', copyReport);
   $('btn-check-reset').addEventListener('click', () => { resetDiag(); renderCheck(true); el.checkText.hidden = true; el.checkNote.textContent = 'Numbers reset. Swipe a few times.'; });
   $('btn-check-done').addEventListener('click', showMenu);
+  el.speedBtn.addEventListener('click', () => { if (!speed.running && tracker.ready) { speedTestAll(); renderCheck(true); } });
   $('check-x').addEventListener('click', showMenu);
   el.pauseBtn.addEventListener('click', pauseGame);
   el.soundBtn.addEventListener('click', toggleMute);
@@ -2844,6 +3025,9 @@ body.cam-on.cam-hidden:not(.checking) #tint { background: var(--cart); }
       copyReport: () => copyReport(),
       resetDiag: () => resetDiag(),
       refreshCheck: () => renderCheck(true),
+      speed: () => JSON.parse(JSON.stringify(Object.assign({ now: backendNow() }, speed))),
+      chooseBackend: (r) => chooseBackend(r),
+      speedTest: () => speedTestAll(),
       async feed(img, t) { // run the real hand model on one picture, as if it were the next camera frame at time t
         if (!tracker.ready) return null;
         const r = await tracker.detect(img, nextTs());
@@ -2858,7 +3042,7 @@ body.cam-on.cam-hidden:not(.checking) #tint { background: var(--cart); }
         hands: hands.map((h) => ({ id: h.id, sx: h.sx, sy: h.sy, dx: h.dx, dy: h.dy, rx: h.rx, ry: h.ry, age: +(nowS() - h.recv).toFixed(3),
           pts: Object.fromEntries(CUT_POINTS.map(([suf]) => { const b = blades.get(h.bid + suf), q = b && b.pts[b.pts.length - 1]; return [suf, q ? [Math.round(q.x), Math.round(q.y)] : null]; })) })),
         camOn, camAsleep, camTracks: camStream ? camStream.getVideoTracks().filter((tr) => tr.readyState === 'live').length : 0, delegate: tracker.delegate, trackerKind: tracker.kind, trackerSource, gpuName, detectMs: +detectMs.toFixed(1), fps: +fpsAvg.toFixed(1), trackingDead,
-        slowGpuSwitch, detectCount, detectHist: detectHist.map((x) => +x.toFixed(1)), detInterval: +detInterval.toFixed(3), latencyMs: +latencyMs.toFixed(1),
+        slowGpuSwitch, camAsk, numHands: tracker.numHands, detectCount, detectHist: detectHist.map((x) => +x.toFixed(1)), detInterval: +detInterval.toFixed(3), latencyMs: +latencyMs.toFixed(1),
         video: { w: video.videoWidth, h: video.videoHeight }, handsSeenAgo: +(nowS() - handsSeenAt).toFixed(2), luma: +lastLuma.toFixed(1), dark: lightDark,
         stats: Object.assign({}, stats), resultsShown, isNewBest, pending: pendingAction && pendingAction.id,
         best: { classic: bestFor('classic'), arcade: bestFor('arcade'), zen: bestFor('zen') }, blade: progress.blade, ach: Object.keys(progress.ach),

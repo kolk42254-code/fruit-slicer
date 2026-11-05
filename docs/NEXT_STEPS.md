@@ -52,6 +52,12 @@ There is no way to see the phone from here, so the game must show its own number
 
 ### A2. Likely causes on this phone and what to try (confirm each with A1 numbers)
 
+> **Owner's first report (5 Nov 2026, TEST app, about 1 m, daylight + room light; played the app before):** tracker
+> 4 results/s, 177 ms per frame on the CPU after an automatic GPU→CPU switch (fixed limits, never compared); camera
+> 16 fps (asked 30); hand never lost in 11 swipes (blur is not the main problem now); shake 10.9 px at 4/s; drawing
+> 60 fps. **Step 1 built:** speed test (GPU vs CPU timed, page GPU from the check screen), Hands setting (1 by default,
+> about 19% faster here), camera asks for at least 24 fps. Next: owner runs "Test" in the check screen and sends a report.
+
 1. **Motion blur → hand lost during a fast swipe → no cut.** A small 1/4" f/2.2 selfie sensor needs long exposures
    indoors, so a fast hand becomes a blur and the tracker drops it.
    - Lower `minHandPresenceConfidence` and `minTrackingConfidence` from 0.5 to about 0.3 (keep detection 0.5) so

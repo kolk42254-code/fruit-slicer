@@ -89,7 +89,7 @@ async def suite(width, height, mobile, R):
         # ---------------------------------------------------------------- settings panel (default values, blocking cuts)
         await page.click('#btn-settings')
         s = await snap(page)
-        R.check(f'[{dev}] Settings opens with saved values', s['ui']['settings'] and await page.is_checked('#diff-normal') and await page.is_checked('#sens-normal') and await page.is_checked('#cut-hand') and await page.is_checked('#cam-show'))
+        R.check(f'[{dev}] Settings opens with saved values', s['ui']['settings'] and await page.is_checked('#diff-normal') and await page.is_checked('#sens-normal') and await page.is_checked('#cut-hand') and await page.is_checked('#cam-show') and await page.is_checked('#hands-1'))
         a = tg['arcade']
         await swipe_through(page, a['x'], a['y'], half=a['r'] * 2)
         await tick(page, 0.6)
@@ -431,11 +431,19 @@ async def suite(width, height, mobile, R):
         await page.click('label:has(#sens-easy)')
         await page.click('label:has(#diff-hard)')
         await page.click('label:has(#cam-hide)')
+        await page.click('label:has(#hands-2)')
         await page.evaluate("(() => { const r = document.getElementById('set-music'); r.value = '20'; r.dispatchEvent(new Event('input', {bubbles: true})); })()")
         s = await snap(page)
         saved = json.loads(await page.evaluate("localStorage.getItem('fruitSlicer.settings')"))
         R.check(f'[{dev}] Settings: choices apply at once and are saved', s['settings']['sens'] == 'easy' and s['settings']['diff'] == 'hard' and s['settings']['camView'] == 'hide' and s['settings']['music'] == 20
-                and saved['sens'] == 'easy' and saved['music'] == 20 and s['ui']['camHidden'] and (await page.text_content('#out-music')) == '20', json.dumps(saved))
+                and saved['sens'] == 'easy' and saved['music'] == 20 and s['ui']['camHidden'] and (await page.text_content('#out-music')) == '20'
+                and s['settings']['hands'] == 2 and saved['hands'] == 2, json.dumps(saved))
+        # which hand tracker to keep after a speed test (ms per result; the page GPU must be clearly faster)
+        cases = [({'worker GPU': 40, 'worker CPU': 177, 'main GPU': 35}, 'worker GPU'), ({'worker GPU': 100, 'worker CPU': 177, 'main GPU': 50}, 'main GPU'),
+                 ({'worker GPU': 'too slow', 'worker CPU': 177, 'main GPU': 'failed'}, 'worker CPU'), ({'worker GPU': 200, 'worker CPU': 150}, 'worker CPU'),
+                 ({'main GPU': 60, 'main CPU': 150}, 'main GPU'), ({'worker GPU': 'failed', 'worker CPU': 'too slow'}, '')]
+        got = [await page.evaluate('(r) => __FS.chooseBackend(r)', r) for r, _ in cases]
+        R.check(f'[{dev}] speed test keeps the fastest tracker (page GPU only when 25% faster)', got == [w for _, w in cases], str(got))
         await page.click('#settings-done')
         s = await to_playing(page, 'classic')
         R.check(f'[{dev}] Hard difficulty: stronger gravity (faster fruit) in the next game', abs(s['G'] - 1.25 * s['H'] * 1.12) < 0.5, f"G {s['G']:.1f}")

@@ -12,7 +12,8 @@ and as an Android app (Capacitor). Hand tracking: Google MediaPipe Tasks Vision,
 - Explain point by point in simple English. Practical and short. Do not use Kannada.
 - Accuracy matters most: check facts on the web or by running code; ask when a request is unclear.
 - "Test 2 times": before publishing, run two full test rounds on the final files (plus the CI emulator test).
-- The owner plays on a Motorola moto g57 power (Android 16), held on a stand, and on a laptop
+- The owner plays on a Motorola moto g57 power (Android 17 per its report; Snapdragon 6s Gen 4, Adreno 710), held on a stand
+  about 1 m away in daylight + room light, and on a laptop
   (Lenovo IdeaPad Slim 5, Ryzen 7 7735HS, Windows + Ubuntu).
 
 ## Repo map
@@ -64,10 +65,17 @@ hand tracker, sound and music, UI, update, render, main loop, wiring (test hooks
 - **Hand tracker:** `ensureTracker()` downloads 4 files (bundle JS, wasm loader, wasm, model) with one progress bar,
   as Blobs → a Web Worker made from `workerMain` (no network inside the worker). Falls back to the main thread.
   Asset sets: website = jsDelivr → unpkg (code), Google Storage `/1` → `/latest` (model); app = local files first.
-  `preferredDelegate()` picks CPU for software GPUs; `tracker.watchdog()` + slow-frame checks restart the worker on CPU.
+  `preferredDelegate()` picks CPU for software GPUs. **Speed test** (`speedStartup` / `speedTestAll`): uses the saved
+  choice (`localStorage` `fruitSlicer.tracker`, same browser + game version) or times the worker GPU against the worker
+  CPU (skip 5 warm-up results, median of 10, ms from frame sent to result) and keeps the faster; the check screen's
+  **Test** button also times the GPU on the page (kept only if 25% faster, it holds up drawing). Never swaps during a
+  game. `tracker.watchdog()` still swaps a hung GPU worker for the CPU at once. The worker keeps one tracker per
+  delegate (`use` message); `numHands` follows the Hands setting (`hands` message → `setOptions`).
 - **Frame pump:** `requestVideoFrameCallback` (uses `captureTime`) → `processFrame` → `createImageBitmap` → worker →
   `onDetections` → `updateHands` (match hands between frames) → `feedHand` (One Euro filter per point, (1.2, 25, 1)) →
   `bladePoint`. One frame in flight at a time. `pollFrame` is the backup when frame callbacks stall.
+- **Camera request:** `frameRate {ideal 30, min 24}`; if refused (not a permission/no-camera error), asks again
+  without `min` (`camAsk` says which).
 - **Camera picture:** `<video id="cam">`, mirrored, `object-fit: cover`; `toScreen()` uses the same cover maths.
   Transparent poster + invisible until the camera is on (Android shows a grey "play" picture otherwise).
 - **Leaving:** web `visibilitychange` (camera off after 3 s hidden); app `window.__fsAppHidden(true/false)` from
@@ -79,14 +87,17 @@ hand tracker, sound and music, UI, update, render, main loop, wiring (test hooks
   clipboard (falls back to `execCommand('copy')`, then shows the text to copy by hand). Counters live in `diag`
   (always counted, reset when the screen opens); `checkNumbers()` → `checkLines()` → rows / `buildReport()`.
   The page version comes from `app/package.json` (`__GAME_VERSION__`, filled in by `tools/build.py`).
-- **Saved on the device:** `localStorage` keys `fruitSlicer.settings` and `fruitSlicer.progress` (stats, achievements,
-  blade colour). Version-1 keys are migrated.
+- **Hands setting:** 1 (default, faster: MediaPipe skips its "find a hand" step while it follows one hand) or 2. At low
+  tracker rates 1 hand can miss one moving frame per fast swipe (`feed_slow1` test; 12/14 vs 13/14 frames at 7.5/s).
+- **Saved on the device:** `localStorage` keys `fruitSlicer.settings`, `fruitSlicer.progress` (stats, achievements,
+  blade colour) and `fruitSlicer.tracker` (speed test result). Version-1 keys are migrated.
 - **Tuning knobs:** `CFG` (fruitHit, bombHit 0.9, teleport 0.6, maxSwipe 8, camGap 0.3, gapReset 0.25,
   speedWindow 0.05, comboWindow 0.22, track* matching limits), `SENS`, `CUT_POINTS`, cursor glide in `drawBlades`.
 - **Test hooks** (`#test`): `__FS.snap()` (full state), `manual/tick` (controlled clock), `spawn`, `point/end` (fake
   strokes), `feed(image, t)` (run the real tracker on one picture), `feedOnly`, `setVideoSize`, `toScreen`, `posAt`,
   `power`, `setSetting`, `back` (app Back button), `clearItems`, `progress`, `start/menu/pause/resume`,
-  `check` (open the tracking check), `checkNumbers`, `report`, `copyReport`, `resetDiag`, `refreshCheck`.
+  `check` (open the tracking check), `checkNumbers`, `report`, `copyReport`, `resetDiag`, `refreshCheck`, `speed`
+  (speed test state), `chooseBackend(results)`, `speedTest`. Test-only globals: `__FS_DELEGATE`, `__FS_NO_WORKER`.
 
 ## Build, test, release
 

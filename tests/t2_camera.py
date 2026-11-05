@@ -37,9 +37,11 @@ async def poll_hands(page, secs, every=0.25):
         await page.wait_for_timeout(int(every * 1000))
     return out
 
-async def mapping_case(p, R, video, W, H, mobile):
+HANDS2 = "try { localStorage.setItem('fruitSlicer.settings', JSON.stringify({ hands: 2 })); } catch (e) {}"
+
+async def mapping_case(p, R, video, W, H, mobile, init_js=None):
     br = await launch(p, video=video)
-    ctx, page = await open_game(br, Net(), W, H, mobile=mobile, dpr=1)
+    ctx, page = await open_game(br, Net(), W, H, mobile=mobile, dpr=1, init_js=init_js)
     await start_camera(page)
     await page.wait_for_timeout(3000)
     samples = await poll_hands(page, 5)
@@ -248,11 +250,11 @@ async def feed_case(p, R, name):
     R.check(f'[{name}] no frame errors', not errs, str(errs[:2]))
     await br.close()
 
-async def feed_slow_case(p, R, name):
+async def feed_slow_case(p, R, name, hands=2):
     meta = json.load(open(f'{VIDEOS}/meta.json'))[name]
     W, H = 1280, 720
     br = await launch(p, video='nohand')
-    ctx, page = await open_game(br, Net(), W, H)
+    ctx, page = await open_game(br, Net(), W, H, init_js=HANDS2 if hands == 2 else None)
     await start_camera(page)
     await page.evaluate("__FS.feedOnly(true); __FS.setVideoSize(640, 480); __FS.manual(true); __FS.spawning(false); __FS.start('classic'); __FS.tick(1/60, 120)")
     y_path = expected_screen(0, meta['tip_y'], 640, 480, W, H)[1]
@@ -264,9 +266,13 @@ async def feed_slow_case(p, R, name):
     await page.evaluate(f"__FS.spawn({{kind:'bomb', x:{mid - 60}, y:{y_path}, frozen:true}})")
     log = await page.evaluate(FEED_JS, [name, meta['frames'], 2, 30, 30, 4])
     s = await snap(page)
-    R.check(f'[{name} @7.5fps] slow tracker: fruit on the swipe path is cut, fruit off the path stays', s['score'] == 1 and any(i['type'] == 'lemon' for i in s['items']),
+    tag = f'[{name} @7.5fps, {hands} hand{"s" if hands > 1 else ""}]'
+    R.check(f'{tag} slow tracker: fruit on the swipe path is cut, fruit off the path stays', s['score'] == 1 and any(i['type'] == 'lemon' for i in s['items']),
             f"score {s['score']}, samples " + str([(l['f'], l['hands']) for l in log]))
-    R.check(f'[{name} @7.5fps] slow tracker: a bomb on the fingertip path still goes off', s['lives'] == 2, f"lives {s['lives']}")
+    if hands == 2:   # 1 hand can miss one moving frame at 7.5/s; a gap that long never sets off a bomb (by design)
+        R.check(f'{tag} slow tracker: a bomb on the fingertip path still goes off', s['lives'] == 2, f"lives {s['lives']}")
+    else:
+        print(f"   {tag} bomb on the path: {'went off' if s['lives'] == 2 else 'not set off (a frame was missed, gap too long for a bomb)'}; frames with a hand: {sum(l['tips'] for l in log)}/{len(log)}")
     await br.close()
 
 async def gpu_switch_case(p, R):
@@ -275,10 +281,17 @@ async def gpu_switch_case(p, R):
     await start_camera(page)
     t0 = time.time(); t_end = t0 + 90
     s = await snap(page)
-    while time.time() < t_end and s['delegate'] != 'CPU':
+    while time.time() < t_end and (s['delegate'] != 'CPU' or (await page.evaluate('__FS.speed()'))['running']):   # until the speed test is done
         await page.wait_for_timeout(1000)
         s = await snap(page)
     R.check('[slow GPU] slow GPU tracker (background thread) switches itself to CPU', s['delegate'] == 'CPU' and s['slowGpuSwitch'] and s['trackerKind'] == 'worker', f"after {time.time() - t0:.0f}s")
+    for _ in range(60):
+        sp = await page.evaluate('__FS.speed()')
+        if not sp['running']: break
+        await page.wait_for_timeout(1000)
+    R.check('[slow GPU] it switched because both were timed (GPU slower than CPU), not by a fixed limit',
+            sp['source'] == 'auto' and set(sp['results']) == {'worker GPU', 'worker CPU'} and isinstance(sp['results']['worker CPU'], (int, float))
+            and (sp['results']['worker GPU'] in ('too slow', 'failed') or sp['results']['worker GPU'] > sp['results']['worker CPU']) and sp['chosen'] == 'worker CPU', json.dumps(sp['results']))
     await page.wait_for_timeout(6000)
     s = await snap(page)
     R.check('[slow GPU] hand still tracked after the switch', len(s['hands']) == 1 and s['handsSeenAgo'] < 2 and not s['trackingDead'], json.dumps(s['hands'])[:200])
@@ -467,7 +480,7 @@ async def check_case(p, R):
     R.check(f'[check] hand size = true hand box ({exp:.1%} of the picture width), tracker sure > 90%',
             len(N['hands']) == 1 and abs(N['hands'][0]['size'] - exp) < 0.02 and N['hands'][0]['sure'] > 0.9, json.dumps(N['hands']))
     rows = s['ui']['checkRows']
-    R.check('[check] all 7 rows filled in on screen', all(v and v != '…' for v in rows.values()) and '640×480' in rows['cam'] and 'hand 1: size' in rows['hand'] and 'results/s' in rows['trk'], json.dumps(rows, ensure_ascii=False)[:300])
+    R.check('[check] all 8 rows filled in on screen', all(v and v != '…' for v in rows.values()) and '640×480' in rows['cam'] and 'hand 1: size' in rows['hand'] and 'results/s' in rows['trk'], json.dumps(rows, ensure_ascii=False)[:300])
     px = await page.evaluate(SKEL_JS)
     R.check('[check] hand skeleton drawn on the finger bones', px is not None and all(n >= 2 for n in px), str(px))
     tip0 = s['hands'][0] if s['hands'] else None
@@ -481,7 +494,7 @@ async def check_case(p, R):
     await page.wait_for_function('window.__clip.text !== null', timeout=5000)
     text = await page.evaluate('window.__clip.text')
     s = await snap(page)
-    need = ('Camera: 640×480', 'Camera can: ', 'Tracker: ', 'Delay (camera to result): ', 'Hands now: hand 1: size ', 'Swipes: ', 'Steadiness', 'Screen: 1280×720', 'Settings: difficulty normal')
+    need = ('Camera: 640×480', 'asked for at least 24 fps', 'Speed test (', 'hands 1', 'Camera can: ', 'Tracker: ', 'Delay (camera to result): ', 'Hands now: hand 1: size ', 'Swipes: ', 'Steadiness', 'Screen: 1280×720', 'Settings: difficulty normal')
     R.check(f'[check] Copy report: report on the clipboard with version {APP_VERSION}, camera, tracker, delay, hand, swipes, screen, settings',
             text.startswith('Fruit Slicer tracking report') and f'Version {APP_VERSION} (website)' in text and all(k in text for k in need), text[:400])
     R.check('[check] says the report was copied', 'copied' in s['ui']['checkNote'] and not s['ui']['checkText'], s['ui']['checkNote'])
@@ -526,6 +539,7 @@ async def check_case(p, R):
     s = await reopen_check(page)
     await page.evaluate("__FS.feedOnly(true); __FS.setVideoSize(640, 480); __FS.manual(true); __FS.resetDiag()")
     await page.wait_for_timeout(2500)   # a live camera frame may still be in the tracker: let it come back, then clear again
+    await seq(page, frames('swipe_sharp', 0, 1))   # the tracker follows the hand to its new place (1-hand mode looks near the last spot)
     await fresh(page)
     log = await seq(page, frames('swipe_sharp', 0, 17))
     N = await page.evaluate('__FS.checkNumbers()')
@@ -599,12 +613,93 @@ async def check_layout_case(p, R):
     R.check('[check layout] console clean', not bad, ' | '.join(bad[:3]))
     await br.close()
 
+async def hands_case(p, R):
+    """1 hand by default (faster); the "Hands: 2" setting finds both hands at once, without restarting."""
+    br = await launch(p, video='two_static')
+    ctx, page = await open_game(br, Net(), 1280, 720)
+    await start_camera(page)
+    await page.wait_for_timeout(4000)
+    s = await snap(page)
+    R.check('[hands] default: the tracker looks for 1 hand (two hands in the picture, 1 tracked)', s['numHands'] == 1 and len(s['hands']) == 1 and s['settings']['hands'] == 1, f"{len(s['hands'])} tracked")
+    await page.evaluate("__FS.setSetting('hands', 2)")
+    found = 0
+    for _ in range(20):
+        await page.wait_for_timeout(1000)
+        s = await snap(page)
+        found = len(s['hands'])
+        if found == 2: break
+    R.check('[hands] "2 hands" setting: both hands tracked while running', found == 2 and s['numHands'] == 2, f"{found} tracked")
+    await page.evaluate("__FS.setSetting('hands', 1)")
+    for _ in range(20):
+        await page.wait_for_timeout(1000)
+        s = await snap(page)
+        if len(s['hands']) == 1: break
+    R.check('[hands] back to 1 hand', len(s['hands']) == 1 and s['numHands'] == 1, f"{len(s['hands'])} tracked")
+    bad = problems(page, MP_NOISE)
+    R.check('[hands] console clean', not bad, ' | '.join(bad[:3]))
+    await br.close()
+
+async def speed_case(p, R):
+    """Tracking check "Test" button: times GPU, CPU and page GPU, keeps the fastest, never swaps during a game, saves it."""
+    br = await launch(p, video='static_one')
+    ctx, page = await open_game(br, Net(), 1280, 720)
+    await start_camera(page)
+    sp = await page.evaluate('__FS.speed()')
+    R.check('[speed] software graphics: GPU not tried at start, CPU used', sp['source'] == 'skipped' and sp['now'] == 'worker CPU' and not sp['running'], json.dumps(sp)[:200])
+    await page.evaluate('__FS.check()')
+    await wait_state(page, 'check')
+    await page.click('#btn-speed')
+    sp = await page.evaluate('__FS.speed()')
+    R.check('[speed] Test button starts the test (the tracker in use first)', sp['running'] and sp['list'] == ['worker CPU', 'worker GPU', 'main GPU'], json.dumps(sp['list']))
+    # a game starts while testing: no tracker swap until the game is over
+    await page.evaluate("__FS.start('zen')")
+    kinds = set()
+    for _ in range(25):
+        await page.wait_for_timeout(1000)
+        s = await snap(page)
+        kinds.add(s['trackerKind'] + ' ' + s['delegate'])
+    sp = await page.evaluate('__FS.speed()')
+    R.check('[speed] during a game the tracker is never swapped (test waits)', kinds == {'worker CPU'} and sp['running'] and sp['waitPlay'] and 'worker CPU' in sp['results'],
+            f"used {kinds}, results {json.dumps(sp['results'])}")
+    await page.evaluate('__FS.menu()')
+    t0 = time.time()
+    while time.time() - t0 < 240:
+        sp = await page.evaluate('__FS.speed()')
+        if not sp['running']: break
+        await page.wait_for_timeout(1000)
+    await page.wait_for_timeout(1500)
+    sp = await page.evaluate('__FS.speed()')
+    best = await page.evaluate('(r) => __FS.chooseBackend(r)', sp['results'])
+    R.check('[speed] after the game: all three timed, the fastest kept and in use',
+            set(sp['results']) == {'worker CPU', 'worker GPU', 'main GPU'} and sp['chosen'] == (best or 'worker CPU') and sp['now'] == sp['chosen'], json.dumps(sp['results']) + ' -> ' + sp['chosen'])
+    saved = json.loads(await page.evaluate("localStorage.getItem('fruitSlicer.tracker')") or 'null')
+    R.check('[speed] choice saved on the device', saved and saved['choice'] == sp['chosen'] and saved['results'] == sp['results'], str(saved)[:200])
+    await page.evaluate('__FS.check()'); await wait_state(page, 'check')
+    await page.evaluate('__FS.refreshCheck()')
+    s = await snap(page)
+    rep = await page.evaluate('__FS.report()')
+    R.check('[speed] check screen and report show the timings', '→' in s['ui']['checkRows']['speed'] and 'page GPU' in s['ui']['checkRows']['speed'] and 'tested from this screen' in rep,
+            s['ui']['checkRows']['speed'])
+    await page.reload()
+    await page.wait_for_function('window.__FS !== undefined')
+    await start_camera(page)
+    await page.wait_for_timeout(4000)
+    sp = await page.evaluate('__FS.speed()'); s = await snap(page)
+    R.check('[speed] next start uses the saved choice (no new test) and tracks the hand', sp['source'] == 'saved' and not sp['running'] and sp['now'] == saved['choice'] and len(s['hands']) == 1,
+            f"{sp['source']} {sp['now']} hands {len(s['hands'])}")
+    errs = await page.evaluate('window.__FS_ERRORS || []')
+    R.check('[speed] no frame errors', not errs, str(errs[:2]))
+    await br.close()
+
+
 async def main():
     R = Report(f'Suite B v2 camera ({TAG})')
     async with async_playwright() as p:
         cases = {
             'static': lambda: mapping_case(p, R, 'static_one', 1280, 720, False),
-            'two': lambda: mapping_case(p, R, 'two_static', 1280, 720, False),
+            'two': lambda: mapping_case(p, R, 'two_static', 1280, 720, False, init_js=HANDS2),
+            'hands': lambda: hands_case(p, R),
+            'speed': lambda: speed_case(p, R),
             'portrait': lambda: mapping_case(p, R, 'portrait_one', 412, 915, True),
             'nohand': lambda: nohand_case(p, R),
             'dark': lambda: dark_case(p, R),
@@ -612,6 +707,7 @@ async def main():
             'feed_sharp': lambda: feed_case(p, R, 'swipe_sharp'),
             'feed_blur': lambda: feed_case(p, R, 'swipe_blur'),
             'feed_slow': lambda: feed_slow_case(p, R, 'swipe_sharp'),
+            'feed_slow1': lambda: feed_slow_case(p, R, 'swipe_sharp', hands=1),
             'gpu': lambda: gpu_switch_case(p, R),
             'noworker': lambda: noworker_case(p, R),
             'nofileflag': lambda: nofileflag_case(p, R),

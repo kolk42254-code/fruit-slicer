@@ -257,6 +257,7 @@ async function main() {
   check('tracking check: the hand photo shows one hand with its size (about 35%) and sure score',
     chk.hands.length === 1 && Math.abs(chk.hands[0].size - 0.347) < 0.03 && chk.hands[0].sure > 0.5, JSON.stringify(chk.hands));
   log('camera details here: ' + JSON.stringify({ can: chk.can, camSays: chk.camSays, capTime: chk.capTime }));
+  log('tracker speed test here: ' + JSON.stringify(await cdp.eval('__FS.speed()')) + ', camera asked for: ' + (await cdp.eval('__FS.snap().camAsk')));
   await cdp.shot('07_check_hand');
   const copy = await cdp.eval(`(async () => {
     document.getElementById('btn-check-copy').click();

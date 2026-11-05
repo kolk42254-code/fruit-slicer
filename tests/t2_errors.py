@@ -75,6 +75,19 @@ async def main():
         R.check('[check, offline model] later "Use camera instead" from the menu goes to the menu as usual', s['state'] == 'menu' and s['camOn'] and not s['ui']['check'], s['state'])
         await br.close()
 
+        # 2c) a camera that refuses "at least 24 fps": the game asks again normally and works
+        refuse = """(() => { const md = navigator.mediaDevices, orig = md.getUserMedia.bind(md);
+          md.getUserMedia = (c) => (c && c.video && c.video.frameRate && c.video.frameRate.min)
+            ? Promise.reject(Object.assign(new Error('frame rate'), { name: 'OverconstrainedError' })) : orig(c); })();"""
+        br = await launch(p, video='static_one')
+        ctx, page = await open_game(br, Net(), 1280, 720, init_js=refuse)
+        await to_menu_with_camera(page)
+        await page.wait_for_timeout(3000)
+        s = await snap(page)
+        R.check('[24 fps refused] camera still starts with the normal request and tracks the hand',
+                s['camOn'] and s['camAsk'].startswith('normal') and 'OverconstrainedError' in s['camAsk'] and len(s['hands']) == 1, s['camAsk'])
+        await br.close()
+
         # 3) hand model download fails, then works on "Try again"
         br = await launch(p, video='static_one')
         net = Net(block_model=True)
