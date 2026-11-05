@@ -123,6 +123,8 @@ no camera, offline, broken downloads, unplugged camera, app fallbacks), `t2_soak
 Last results on v2.0.0: round 1 = 279/279, round 2 = 292/292, emulator = 26/26.
 Tracking check (`ccf4457`): round 1 = 337/337, round 2 = 337/337, emulator = 33/33.
 Speed test + 1 hand + 24 fps (`891623a`): round 1 = 354/354, round 2 = 354/354, emulator = 34/34 (CI run 9).
+Cursor lead + curved cut + Sharp exposure + re-test on updates (`08df982`): round 1 = 377/377, round 2 = 377/377,
+emulator = 34/34 (CI run 10).
 
 **Android app / CI:** push to a branch `app-<name>` → GitHub Actions builds the APK and runs the emulator test
 (Android 14, WebView 113). Two APKs come out: the release APK (`io.github.kolk42254code.fruitslicer`, "Fruit Slicer";
