@@ -107,7 +107,9 @@ Tracking check (`ccf4457`): round 1 = 337/337, round 2 = 337/337, emulator = 33/
 (Android 14, WebView 113). Two APKs come out: the release APK (`io.github.kolk42254code.fruitslicer`, "Fruit Slicer";
 signed with the permanent key only on `main`, a one-time key elsewhere) and the debug APK
 (`io.github.kolk42254code.fruitslicer.test`, "Fruit Slicer TEST", set in `app/android/app/build.gradle`), which installs
-next to the real app, so the owner can try a test build without uninstalling. The activity class stays
+next to the real app, so the owner can try a test build without uninstalling. The debug APK is signed with the
+fixed, non-secret `app/android/test-debug.keystore` (password `android`, alias `androiddebugkey`), so each new TEST
+build installs over the last one; the emulator test checks its certificate. The activity class stays
 `io.github.kolk42254code.fruitslicer.MainActivity` in both (use the full name with `am start`). Read results with
 `gh api repos/kolk42254-code/fruit-slicer/actions/jobs/<job-id>/logs`; the emulator job prints small screenshots as
 base64 JPEG between `SHOT-BEGIN` and `SHOT-END` lines. Artifacts (APKs, screenshots) are also on the run page.

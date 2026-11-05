@@ -5,6 +5,7 @@ set -u
 PKG=io.github.kolk42254code.fruitslicer                    # release APK ("Fruit Slicer")
 TEST_PKG=$PKG.test                                        # debug APK ("Fruit Slicer TEST"): own ID, installs next to the real app
 ACTIVITY=io.github.kolk42254code.fruitslicer.MainActivity  # the activity class keeps this name in both
+TEST_CERT=5b3869129f4e9353484721b75aba69aa44c6c1dd5c2f99ba4e487dfc6fb71ae7  # app/android/test-debug.keystore (SHA-256)
 OUT=ci-out
 mkdir -p "$OUT"
 : > "$OUT/results.txt"
@@ -49,6 +50,15 @@ if [ -n "$BT" ] && [ -x "$BT/aapt2" ]; then
   fi
 else
   note "note: aapt2 not found, APK names not checked"
+fi
+if [ -n "$BT" ] && [ -x "$BT/apksigner" ]; then
+  CERT="$("$BT/apksigner" verify --print-certs dist/app-debug.apk 2>/dev/null | grep -m1 'certificate SHA-256 digest' | awk '{print $NF}')"
+  if [ "$CERT" = "$TEST_CERT" ]; then
+    note "PASS debug APK is signed with the fixed test key (new TEST builds install over old ones)"
+  else
+    note "FAIL debug APK is signed with the fixed test key (got: ${CERT:-none})"
+    RC=1
+  fi
 fi
 
 # 1) debug APK (WebView debugging on), camera permission granted at install

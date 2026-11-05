@@ -19,6 +19,16 @@ android {
     buildFeatures {
         resValues true   // the app name below is made per build type
     }
+    signingConfigs {
+        // TEST builds only: a fixed key (standard debug settings, not secret), so each new "Fruit Slicer TEST"
+        // build installs over the last one. Release APKs are signed in CI with the real key.
+        debug {
+            storeFile file('../test-debug.keystore')
+            storePassword 'android'
+            keyAlias 'androiddebugkey'
+            keyPassword 'android'
+        }
+    }
     buildTypes {
         release {
             minifyEnabled false
@@ -28,6 +38,7 @@ android {
         // Test builds get their own app ID and name, so they install next to the real app (no uninstall needed).
         debug {
             applicationIdSuffix ".test"
+            signingConfig signingConfigs.debug
             resValue "string", "app_name", "Fruit Slicer TEST"
         }
     }
