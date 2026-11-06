@@ -137,6 +137,8 @@ Cursor lead + curved cut + Sharp exposure + re-test on updates (`08df982`): roun
 emulator = 34/34 (CI run 10).
 Steady cursor + camera size + better report (`b100fa2`): round 1 = 388/388, round 2 = 388/388, emulator = 34/34
 (CI run 11).
+Sharp exposure fix (longer exposure first, ignored ISO) + HD removed (`5046527`): round 1 = 384/384, round 2 =
+384/384, emulator = 34/34 (CI run 12).
 
 **Android app / CI:** push to a branch `app-<name>` → GitHub Actions builds the APK and runs the emulator test
 (Android 14, WebView 113). Two APKs come out: the release APK (`io.github.kolk42254code.fruitslicer`, "Fruit Slicer";
