@@ -567,9 +567,16 @@ async def check_case(p, R):
     log = await seq(page, frames('swipe_sharp', 0, 9) + [['swipe_sharp', 19]] + frames('swipe_sharp', 10, 17))
     N = await page.evaluate('__FS.checkNumbers()')
     R.check('[check] a one-frame jump of the fingertip is counted (1 jump)', N['jumps'] == 1 and all(n == 1 for n in log), f"jumps {N['jumps']}, found {log}")
+    await fresh(page)
+    log = await seq(page, frames('swipe_sharp', 10, 22) + [['swipe_sharp', i] for i in (21, 20, 19, 18)])
+    N = await page.evaluate('__FS.checkNumbers()')
+    R.check('[check] a quick swipe that turns straight back is not a jump', N['jumps'] == 0 and N['swipes'] >= 1, f"jumps {N['jumps']}, swipes {N['swipes']}")
+    rep = await page.evaluate('__FS.report()')
+    R.check('[check] report gives the average hand size and sure score over the check', re.search(r'Hands during the check: average size 3\d% of picture width .*average sure 9\d%', rep) is not None,
+            [l for l in rep.split('\n') if l.startswith('Hands during')])
     await seq(page, [['nohand', 0]] * 12)
     s = await snap(page)
-    R.check('[check] no hand: "Show your hand" tip, no hand in the numbers', 'Show your hand' in s['ui']['checkTip'] and s['ui']['checkRows']['hand'] == 'no hand found', s['ui']['checkTip'])
+    R.check('[check] no hand: "Show your hand" tip, no hand in the numbers', 'Show your hand' in s['ui']['checkTip'] and s['ui']['checkRows']['hand'].startswith('no hand found'), s['ui']['checkTip'])
     log = await seq(page, [['small', 0.3]] * 4)
     s = await snap(page)
     N = await page.evaluate('__FS.checkNumbers()')
@@ -709,6 +716,8 @@ async def lead_case(p, R):
     br = await launch(p, video='nohand')
     ctx, page = await open_game(br, Net(), 1280, 720)
     await start_camera(page)
+    await page.evaluate('__FS.check()')   # no menu fruit here: a test swipe must not start a game (that clears strokes)
+    await wait_state(page, 'check')
     await page.evaluate("__FS.feedOnly(true); __FS.setVideoSize(640, 480); __FS.manual(true)")
     js = """async ([fr, idxs, dt]) => { const out = [];
       for (const i of idxs) { const im = await new Promise((res) => { const x = new Image(); x.onload = () => res(x); x.src = fr + 'swipe_sharp/f' + String(i + 1).padStart(3, '0') + '.png'; });
@@ -719,7 +728,7 @@ async def lead_case(p, R):
     cap = 0.12 * s['MIN']
     still = [l for l in log if l[1] is not None and (l[0] < 18 or l[0] >= 34)]
     moving = [l for l in log if l[1] is not None and 18 <= l[0] <= 26]
-    R.check('[lead] still hand: cursor drawn exactly on the tracked point', still and all(abs(l[2] - l[1]) < 0.5 and abs(l[4] - l[3]) < 0.5 for l in still), str(still[:3]))
+    R.check('[lead] still hand: no lead, cursor held within the steady radius of the tracked point', still and all(abs(l[2] - l[1]) <= cap / 3 and abs(l[4] - l[3]) <= cap / 3 for l in still), str(still[:3]))
     ahead = [l[1] - l[2] for l in moving]         # the finger moves to screen-left: ahead = smaller x
     R.check('[lead] fast swipe: cursor drawn ahead in the direction of movement, never more than 12% of the screen',
             moving and all(a > 5 for a in ahead) and all(a <= cap + 0.5 for a in ahead), f"ahead px {[round(a) for a in ahead]}, cap {cap:.0f}")
@@ -780,6 +789,77 @@ async def exposure_case(p, R):
     await br.close()
 
 
+STEADY_JS = """async ([fr, seq, dt]) => { const out = [];   // seq: [frame, dx, dy] = swipe_sharp frame moved by (dx, dy) video px
+  window.__imc = window.__imc || {};
+  for (const [i, dx, dy] of seq) {
+    const u = fr + 'swipe_sharp/f' + String(i + 1).padStart(3, '0') + '.png';
+    const im = window.__imc[u] || (window.__imc[u] = await new Promise((res) => { const x = new Image(); x.onload = () => res(x); x.src = u; }));
+    const c = document.createElement('canvas'); c.width = 640; c.height = 480; const g = c.getContext('2d');
+    g.fillStyle = 'rgb(205,205,205)'; g.fillRect(0, 0, 640, 480); g.drawImage(im, dx, dy);
+    await __FS.feed(c, __FS.now()); __FS.tick(dt, 1);
+    const h = __FS.snap().hands[0]; out.push(h ? [h.sx, h.px, h.sy, h.py] : null);
+  }
+  return out; }"""
+
+async def steady_case(p, R):
+    """Steady cursor (display only): a shaking still hand's cursor stays put; slow moves are followed; swipes are not held."""
+    import random
+    rnd = random.Random(3)
+    br = await launch(p, video='nohand')
+    ctx, page = await open_game(br, Net(), 1280, 720)
+    await start_camera(page)
+    await page.evaluate('__FS.check()')   # no menu fruit here: a test swipe must not start a game (that clears strokes)
+    await wait_state(page, 'check')
+    await page.evaluate("__FS.feedOnly(true); __FS.setVideoSize(640, 480); __FS.manual(true); __FS.resetDiag()")
+    shaky = [[1, rnd.choice([-10, 10]) + rnd.randint(-3, 3), rnd.randint(-6, 6)] for _ in range(30)]   # +-20 screen px, 9 results/s
+    log = await page.evaluate(STEADY_JS, [FR_URL, shaky, 1 / 9])
+    pts = [l for l in log[10:] if l]
+    sx = [l[0] for l in pts]; px = [l[1] for l in pts]
+    R.check('[steady] still hand with heavy shake: drawn cursor moves less than a quarter of the tracked point', len(pts) >= 15 and (max(px) - min(px)) < 0.25 * (max(sx) - min(sx)),
+            f"tracked range {max(sx) - min(sx):.0f} px, cursor range {max(px) - min(px):.0f} px")
+    drift = [[1, k * 3, 0] for k in range(25)]                                                             # 54 px/s: slow
+    log = await page.evaluate(STEADY_JS, [FR_URL, drift, 1 / 9])
+    s = await snap(page)
+    gap = abs(log[-1][0] - log[-1][1])
+    R.check('[steady] slow move: the cursor follows (stays within 4% of the screen)', gap <= 0.04 * s['MIN'] + 1 and abs(log[-1][1] - log[0][1]) > 100,
+            f"gap {gap:.0f} px, cursor moved {abs(log[-1][1] - log[0][1]):.0f} px")
+    swipe = [[1, 72 + k * 60, 0] for k in range(6)]                                                        # fast: 120 screen px per result
+    log = await page.evaluate(STEADY_JS, [FR_URL, swipe, 1 / 9])
+    R.check('[steady] fast swipe: not held back (cursor ahead of the tracked point)', log[-1] and log[-1][1] < log[-1][0] - 5, f"tracked {log[-1][0]:.0f}, cursor {log[-1][1]:.0f}")
+    errs = await page.evaluate('window.__FS_ERRORS || []')
+    R.check('[steady] no frame errors', not errs, str(errs[:2]))
+    await br.close()
+
+async def camsize_case(p, R):
+    """Settings > Camera size: HD asks for 1280x720 and keeps the frame rate; exposure requests keep the size; Normal goes back."""
+    br = await launch(p, video='static_one')
+    ctx, page = await open_game(br, Net(), 1280, 720, init_js=EXPO_STUB)
+    await start_camera(page)
+    await page.evaluate("__FS.setSetting('camSize', 'hd')"); await page.wait_for_timeout(600)
+    await page.evaluate("__FS.setSetting('exposure', 'sharp')"); await page.wait_for_timeout(600)
+    await page.evaluate("__FS.setSetting('camSize', 'normal')"); await page.wait_for_timeout(600)
+    ap = await page.evaluate('window.__applied')
+    adv = lambda a: (a.get('advanced') or [{}])[0]
+    hd = next((a for a in ap if a.get('width') == {'ideal': 1280} and not a.get('advanced')), {})
+    ex = next((a for a in ap if adv(a).get('exposureMode') == 'manual'), {'advanced': [{}]})
+    nm = ap[-1] if ap else {'advanced': [{}]}
+    R.check('[camera size] HD: asks for 1280x720 and keeps "at least 24 fps"', hd.get('width') == {'ideal': 1280} and hd.get('height') == {'ideal': 720} and hd.get('frameRate') == {'ideal': 30, 'min': 24}, json.dumps(hd))
+    R.check('[camera size] Sharp exposure keeps the HD size and frame rate', ex.get('width') == {'ideal': 1280} and ex.get('frameRate', {}).get('min') == 24 and ex['advanced'][0]['exposureMode'] == 'manual', json.dumps(ex))
+    R.check('[camera size] back to Normal (640x480), Sharp exposure kept', nm.get('width') == {'ideal': 640} and nm.get('height') == {'ideal': 480} and nm['advanced'][0]['exposureMode'] == 'manual', json.dumps(nm))
+    await br.close()
+    br = await launch(p, video='static_one')
+    ctx, page = await open_game(br, Net(), 1280, 720)
+    await start_camera(page)
+    await page.evaluate("__FS.setSetting('camSize', 'hd')")
+    await page.wait_for_timeout(4000)
+    s = await snap(page)
+    rep = await page.evaluate('__FS.check(), __FS.report()')
+    R.check('[camera size] HD on a real (fake) camera: keeps tracking, report names the setting', len(s['hands']) == 1 and not s['camSizeNote'] and 'camera size hd' in rep, f"hands {len(s['hands'])}, note {s['camSizeNote']!r}, video {s['video']}")
+    bad = problems(page, MP_NOISE)
+    R.check('[camera size] console clean', not bad, ' | '.join(bad[:3]))
+    await br.close()
+
+
 async def main():
     R = Report(f'Suite B v2 camera ({TAG})')
     async with async_playwright() as p:
@@ -790,6 +870,8 @@ async def main():
             'speed': lambda: speed_case(p, R),
             'lead': lambda: lead_case(p, R),
             'exposure': lambda: exposure_case(p, R),
+            'steady': lambda: steady_case(p, R),
+            'camsize': lambda: camsize_case(p, R),
             'portrait': lambda: mapping_case(p, R, 'portrait_one', 412, 915, True),
             'nohand': lambda: nohand_case(p, R),
             'dark': lambda: dark_case(p, R),

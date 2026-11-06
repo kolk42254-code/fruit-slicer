@@ -496,6 +496,13 @@ body.cam-on.cam-hidden:not(.checking) #tint { background: var(--cart); }
       </div>
       <p class="help">Sharp: shorter exposure, so a fast hand blurs less. Needs good light. Only on cameras that allow it.</p>
     </fieldset>
+    <fieldset class="seg"><legend>Camera size</legend>
+      <div class="opts">
+        <label><input type="radio" name="camSize" id="size-normal" value="normal"><span>Normal</span></label>
+        <label><input type="radio" name="camSize" id="size-hd" value="hd"><span>HD</span></label>
+      </div>
+      <p class="help">HD: a bigger picture, so your hand is bigger and steadier for the tracker. Each frame may take longer.</p>
+    </fieldset>
     <div id="check-row" class="check-row">
       <button id="btn-check" class="btn btn-ghost small" type="button">Check hand tracking</button>
       <p class="help">See what the hand tracker sees, with live numbers you can copy and send.</p>
@@ -629,7 +636,7 @@ body.cam-on.cam-hidden:not(.checking) #tint { background: var(--cart); }
   }
 
   // ================================================================ settings & progress (saved on this device)
-  const DEFAULT_SETTINGS = { diff: 'normal', sens: 'normal', cutWith: 'hand', camView: 'show', hands: 1, exposure: 'auto', sfx: 80, music: 50, muted: false };
+  const DEFAULT_SETTINGS = { diff: 'normal', sens: 'normal', cutWith: 'hand', camView: 'show', hands: 1, exposure: 'auto', camSize: 'normal', sfx: 80, music: 50, muted: false };
   function loadSettings() {
     let s = {};
     try { s = JSON.parse(store.get('fruitSlicer.settings', '{}')) || {}; } catch (e) { s = {}; }
@@ -640,6 +647,7 @@ body.cam-on.cam-hidden:not(.checking) #tint { background: var(--cart); }
     if (s.camView === 'show' || s.camView === 'hide') out.camView = s.camView;
     if (s.hands === 1 || s.hands === 2) out.hands = s.hands;
     if (s.exposure === 'auto' || s.exposure === 'sharp') out.exposure = s.exposure;
+    if (s.camSize === 'normal' || s.camSize === 'hd') out.camSize = s.camSize;
     if (isFinite(s.sfx)) out.sfx = clamp(Math.round(s.sfx), 0, 100);
     if (isFinite(s.music)) out.music = clamp(Math.round(s.music), 0, 100);
     if (typeof s.muted === 'boolean') out.muted = s.muted;
@@ -1699,6 +1707,24 @@ body.cam-on.cam-hidden:not(.checking) #tint { background: var(--cart); }
   };
 
   let camOn = false, camStream = null, camStage = 'idle', modelBytes = null, camAsk = '';
+  let camBase = {}, camSizeNow = '', camSizeNote = ''; // frame rate and size asked from the camera (sent again with every change)
+  function camSizeAsk(portrait) { // Normal: laptops 640x480, tall phones the camera's own size (no square crop); HD: 1280x720
+    if (settings.camSize === 'hd') return { width: { ideal: 1280 }, height: { ideal: 720 } };
+    return portrait ? {} : { width: { ideal: 640 }, height: { ideal: 480 } };
+  }
+  function camApply(advanced) { // a constraints change replaces all of them: keep the frame rate and size every time
+    const tr = camStream ? camStream.getVideoTracks()[0] : null;
+    if (!tr) return Promise.reject(new Error('no camera'));
+    return tr.applyConstraints(advanced ? Object.assign({}, camBase, { advanced: [advanced] }) : Object.assign({}, camBase));
+  }
+  async function applyCamSize() { // Settings > Camera size changed while the camera is on
+    camSizeNow = settings.camSize;
+    const s = settings.camSize === 'hd' ? { width: { ideal: 1280 }, height: { ideal: 720 } } : { width: { ideal: 640 }, height: { ideal: 480 } };
+    const old = camBase;
+    camBase = Object.assign({ frameRate: old.frameRate || { ideal: 30 } }, s);
+    try { await camApply(expo.mode === 'manual' ? { exposureMode: 'manual', exposureTime: expo.time, iso: expo.iso || undefined } : null); camSizeNote = ''; }
+    catch (err) { camBase = old; camSizeNote = 'camera refused (' + ((err && err.name) || 'error') + ')'; }
+  }
   let trackerPromise = null, trackerStage = 'idle', trackerProgress = 0, trackerSource = '';
   let lastTs = 0, detectFails = 0, detectMs = 0, detectCount = 0, detectHist = [], slowGpuSwitch = false, cpuFailed = false, gpuName = '';
   let handsSeenAt = -99, trackingDead = false, lastVideoTime = -1, rvfcOn = false, lastRvfcAt = 0, detInterval = 0.05, lastResultAt = 0;
@@ -1712,6 +1738,7 @@ body.cam-on.cam-hidden:not(.checking) #tint { background: var(--cart); }
   function resetDiag() {
     diag = { since: performance.now(), frames: 0, missed: 0, lastPresented: -1, capKnown: 0, capGuess: 0, skipped: 0, results: 0,
       took: [], wait: [], total: [], swipes: 0, swipeFrames: 0, swipeLost: 0, gapMax: 0, broken: 0, shakeRaw: -1, shakeCursor: -1, jumps: 0,
+      sizeN: 0, sizeSum: 0, sizeMin: 1, sizeMax: 0, sureN: 0, sureSum: 0,
       rateAt: performance.now(), rateFrames: 0, rateResults: 0, rated: false, camFps: 0, resFps: 0 };
   }
   resetDiag();
@@ -1941,18 +1968,22 @@ body.cam-on.cam-hidden:not(.checking) #tint { background: var(--cart); }
     }
     // Laptops: ask for a light 640x480 picture. Tall phone screens: take the camera's own size (no square crop).
     // Ask for at least 24 frames per second (some phones drop to 15 indoors); if the camera refuses, ask normally.
+    // Camera size "HD" (Settings): 1280x720, so the hand is bigger for the tracker.
     const portrait = window.innerHeight > window.innerWidth;
-    const base = portrait ? { facingMode: 'user' } : { facingMode: 'user', width: { ideal: 640 }, height: { ideal: 480 } };
+    const size = camSizeAsk(portrait);
     let stream;
     try {
-      stream = await navigator.mediaDevices.getUserMedia({ audio: false, video: Object.assign({ frameRate: { ideal: 30, min: 24 } }, base) });
+      camBase = Object.assign({ frameRate: { ideal: 30, min: 24 } }, size);
+      stream = await navigator.mediaDevices.getUserMedia({ audio: false, video: Object.assign({ facingMode: 'user' }, camBase) });
       camAsk = 'at least 24 fps';
     } catch (err) {
       if (/NotAllowed|PermissionDenied|Security|NotFound|DevicesNotFound/.test((err && err.name) || '')) throw err;
       console.warn('Fruit Slicer: the camera refused "at least 24 fps", asking normally.', err);
-      stream = await navigator.mediaDevices.getUserMedia({ audio: false, video: Object.assign({ frameRate: { ideal: 30 } }, base) });
+      camBase = Object.assign({ frameRate: { ideal: 30 } }, size);
+      stream = await navigator.mediaDevices.getUserMedia({ audio: false, video: Object.assign({ facingMode: 'user' }, camBase) });
       camAsk = 'normal (at least 24 fps refused: ' + ((err && err.name) || 'error') + ')';
     }
+    camSizeNow = settings.camSize;
     camStream = stream;
     video.srcObject = stream;
     video.muted = true;
@@ -1985,7 +2016,7 @@ body.cam-on.cam-hidden:not(.checking) #tint { background: var(--cart); }
     const modes = Array.isArray(caps.exposureMode) ? caps.exposureMode : [];
     expo.caps = caps;
     if (settings.exposure !== 'sharp') {
-      if (expo.mode === 'manual' && modes.indexOf('continuous') >= 0) { try { await tr.applyConstraints({ advanced: [{ exposureMode: 'continuous' }] }); } catch (e) { /* keep */ } }
+      if (expo.mode === 'manual' && modes.indexOf('continuous') >= 0) { try { await camApply({ exposureMode: 'continuous' }); } catch (e) { /* keep */ } }
       expo.mode = 'auto'; expo.time = 0; expo.iso = 0; expo.note = '';
       return;
     }
@@ -2010,7 +2041,7 @@ body.cam-on.cam-hidden:not(.checking) #tint { background: var(--cart); }
     const c = { exposureMode: 'manual', exposureTime: time };
     if (iso) c.iso = iso;
     expo.busy = true;
-    try { await tr.applyConstraints({ advanced: [c] }); Object.assign(expo, { mode: 'manual', time, iso, note: '' }); return true; }
+    try { await camApply(c); Object.assign(expo, { mode: 'manual', time, iso, note: '' }); return true; }
     catch (err) { Object.assign(expo, { mode: 'auto', note: 'camera refused it (' + ((err && err.name) || 'error') + ')' }); return false; }
     finally { expo.busy = false; }
   }
@@ -2250,17 +2281,22 @@ body.cam-on.cam-hidden:not(.checking) #tint { background: var(--cart); }
       if (primary) { h.sx = s.x; h.sy = s.y; if (h.dx === null) { h.dx = s.x; h.dy = s.y; } noteShake(h, p, s, t); }
       bladePoint(h.bid + suf, s.x, s.y, t, primary);
     }
+    const info = handInfo(h); // tracking check: how big the hand is in the picture, and how sure the tracker is, on average
+    diag.sizeN++; diag.sizeSum += info.size; if (info.size < diag.sizeMin) diag.sizeMin = info.size; if (info.size > diag.sizeMax) diag.sizeMax = info.size;
+    if (info.sure != null) { diag.sureN++; diag.sureSum += info.sure; }
   }
   // Tracking check: fingertip shake while the hand is still (raw tracker point and smoothed cursor) and one-frame jumps.
   function noteShake(h, p, s, t) {
     const raw = toScreen(p[0], p[1]), q = h.q || (h.q = []);
     q.push({ t, x: raw.x, y: raw.y, fx: s.x, fy: s.y });
-    if (q.length > 3) q.shift();
+    if (q.length > 4) q.shift();
     if (q.length < 3) return;
-    const a = q[0], b = q[1], c = q[2];
+    const n = q.length, a = q[n - 3], b = q[n - 2], c = q[n - 1], z = n === 4 ? q[0] : null;
     if (c.t - a.t > 0.8 || c.t <= a.t) return; // frames too far apart (the hand was lost)
     const step = Math.hypot(b.x - a.x, b.y - a.y);
-    if (step > 0.06 * MIN && Math.hypot(c.x - a.x, c.y - a.y) < 0.4 * step) diag.jumps++; // jumped away and came straight back
+    // a jump: away and straight back, from a hand that was not already moving fast (a quick swipe that turns back
+    // looks the same for one frame, but the hand was moving before it)
+    if (z && step > 0.06 * MIN && Math.hypot(c.x - a.x, c.y - a.y) < 0.4 * step && Math.hypot(a.x - z.x, a.y - z.y) < 0.25 * step) diag.jumps++;
     if (Math.hypot(c.fx - a.fx, c.fy - a.fy) / (c.t - a.t) > 0.15 * MIN) return; // moving: not a still hand
     // middle point vs. the average of its neighbours: 0 for a still or steadily moving point, grows with jitter
     const r2 = (b.x - (a.x + c.x) / 2) ** 2 + (b.y - (a.y + c.y) / 2) ** 2, f2 = (b.fx - (a.fx + c.fx) / 2) ** 2 + (b.fy - (a.fy + c.fy) / 2) ** 2;
@@ -2465,7 +2501,7 @@ body.cam-on.cam-hidden:not(.checking) #tint { background: var(--cart); }
   // settings panel
   let settingsFrom = 'menu';
   function syncSettingsForm() {
-    for (const k of ['diff', 'sens', 'cutWith', 'camView', 'hands', 'exposure']) {
+    for (const k of ['diff', 'sens', 'cutWith', 'camView', 'hands', 'exposure', 'camSize']) {
       const r = document.querySelector('input[name="' + k + '"][value="' + settings[k] + '"]');
       if (r) r.checked = true;
     }
@@ -2493,6 +2529,7 @@ body.cam-on.cam-hidden:not(.checking) #tint { background: var(--cart); }
     document.body.classList.toggle('cam-hidden', settings.camView === 'hide');
     if (tracker.ready && tracker.numHands !== settings.hands) tracker.setHands(settings.hands);
     if (camStream && expo.want !== settings.exposure) applyExposure().catch(() => {});
+    if (camStream && camSizeNow !== settings.camSize) applyCamSize().catch(() => {});
     applyVolumes();
     setMutedUI();
     Music.update();
@@ -2616,6 +2653,7 @@ body.cam-on.cam-hidden:not(.checking) #tint { background: var(--cart); }
       build: BUILD_ID, chrome: CHROME_VERSION,
       camAsk, numHands: settings.hands, expo: expoText(),
       hands: hands.filter((h) => h.lm && t - h.recv <= keep).map(handInfo),
+      handAvg: diag.sizeN ? { size: diag.sizeSum / diag.sizeN, min: diag.sizeMin, max: diag.sizeMax, sure: diag.sureN ? diag.sureSum / diag.sureN : null, n: diag.sizeN } : null,
       swipes: diag.swipes, swipeFrames: diag.swipeFrames, swipeLost: diag.swipeLost, gapMs: diag.gapMax * 1000, broken: diag.broken,
       shakeRaw: diag.shakeRaw >= 0 ? Math.sqrt(diag.shakeRaw / 1.5) : null, shakeCursor: diag.shakeCursor >= 0 ? Math.sqrt(diag.shakeCursor / 1.5) : null, jumps: diag.jumps,
       screen: { w: W, h: H, dpr: window.devicePixelRatio || 1, fps: fpsAvg }, settings: Object.assign({}, settings)
@@ -2650,8 +2688,10 @@ body.cam-on.cam-hidden:not(.checking) #tint { background: var(--cart); }
       trk: [N.dead ? 'stopped' : rate(N, N.resFps) + ' results/s · ' + r0(N.tookMs) + ' ms · ' + N.delegate + ' · ' + (N.kind === 'worker' ? 'background' : 'main thread') + ' · ' + pct(N.skippedPct) + ' skipped', N.dead || (N.resFps > 0 && N.resFps < 15)],
       speed: [speedLine(N.speed) + (speedFrom(N.speed, N) ? ' · ' + speedFrom(N.speed, N) : ''), false],
       lag: [r0(N.totalMs) + ' ms (' + (N.capTime === 'measured' ? 'camera timed' : N.capTime === 'guessed' ? 'estimated' : '…') + ') · tracker ' + r0(N.tookMs) + ' ms', N.totalMs > 150],
-      hand: [hs.length ? hs.join(' · ') : 'no hand found', !hs.length || N.hands.some((x) => x.size < SMALL_HAND)],
-      swipe: [N.swipes + ' swipes · lost ' + N.swipeLost + ' of ' + N.swipeFrames + ' frames · longest gap ' + r0(N.gapMs) + ' ms · ' + N.broken + ' broken', lostPct > 20 || N.broken > 0],
+      hand: [(hs.length ? hs.join(' · ') : 'no hand found') + (N.handAvg ? ' · average size ' + pct(N.handAvg.size * 100) : ''),
+        !hs.length || N.hands.some((x) => x.size < SMALL_HAND) || (!!N.handAvg && N.handAvg.size < SMALL_HAND)],
+      swipe: [N.swipes + ' swipes · lost ' + N.swipeLost + ' of ' + N.swipeFrames + ' frames (' + pct(lostPct) + ') · longest gap ' + r0(N.gapMs) + ' ms · ' + N.broken + ' of ' + N.swipes + ' broken',
+        lostPct > 20 || N.broken > 0],
       shake: [N.shakeRaw == null ? 'hold your hand still to measure' : 'shake ' + N.shakeRaw.toFixed(1) + ' px (cursor ' + N.shakeCursor.toFixed(1) + ' px) · ' + N.jumps + ' jumps', N.jumps > 0],
       scr: [N.screen.w + '×' + N.screen.h + ' px ×' + (+N.screen.dpr.toFixed(2)) + ' · drawing ' + r0(N.screen.fps) + ' fps', false]
     };
@@ -2693,10 +2733,12 @@ body.cam-on.cam-hidden:not(.checking) #tint { background: var(--cart); }
       'Speed test (ms from frame to result, lower is better; ' + ({ auto: 'tested at start', check: 'tested from this screen', saved: 'saved from an earlier test', skipped: 'not tested' }[N.speed.source] || 'not tested') + '): ' + speedLine(N.speed) + (speedFrom(N.speed, N) ? '; ' + speedFrom(N.speed, N) : ''),
       'Delay (camera to result): ' + L.lag[0] + '; capture time ' + N.capTime + '; waiting before the tracker ' + r0(N.waitMs) + ' ms',
       'Hands now: ' + L.hand[0],
+      'Hands during the check: ' + (N.handAvg ? 'average size ' + pct(N.handAvg.size * 100) + ' of picture width (smallest ' + pct(N.handAvg.min * 100) + ', largest ' + pct(N.handAvg.max * 100) + ')'
+        + (N.handAvg.sure != null ? ', average sure ' + pct(N.handAvg.sure * 100) : '') + ', in ' + N.handAvg.n + ' results' : 'no hand seen'),
       'Swipes: ' + L.swipe[0] + ' (frames = tracker results while the fingertip moved fast)',
       'Steadiness (still hand, fingertip): ' + L.shake[0],
       'Screen: ' + L.scr[0],
-      'Settings: difficulty ' + N.settings.diff + ', cut sensitivity ' + N.settings.sens + ', cut with ' + N.settings.cutWith + ', hands ' + N.settings.hands + ', exposure ' + N.settings.exposure + ', camera picture ' + N.settings.camView
+      'Settings: difficulty ' + N.settings.diff + ', cut sensitivity ' + N.settings.sens + ', cut with ' + N.settings.cutWith + ', hands ' + N.settings.hands + ', exposure ' + N.settings.exposure + ', camera size ' + N.settings.camSize + (camSizeNote ? ' (' + camSizeNote + ')' : '') + ', camera picture ' + N.settings.camView
     ].join('\n');
   }
   function copyByCommand(text) { // older way, for when the clipboard API is missing or refused
@@ -2918,25 +2960,44 @@ body.cam-on.cam-hidden:not(.checking) #tint { background: var(--cart); }
     if (st.glow === 'rainbow') return 'hsla(' + Math.round((t * 160 + i * 30) % 360) + ',95%,60%,0.65)';
     return st.glow;
   }
+  // Fingertip speed for the drawn cursor, measured over the last quarter second (shake averages out, a swipe does not):
+  // the newest point vs. the first point at least 0.25 s older in the same stroke. Screen px per second.
+  const velTmp = { ok: false, v: 0, vx: 0, vy: 0, age: 0 };
+  function handVel(h, t) {
+    velTmp.ok = false; velTmp.v = 0; velTmp.vx = 0; velTmp.vy = 0;
+    const b = blades.get(h.bid + 't');
+    if (!b || b.pts.length < 2) return velTmp;
+    const p1 = b.pts[b.pts.length - 1], age = t - p1.t;
+    if (!(age >= 0) || age > 0.35) return velTmp;
+    let k = b.pts.length - 2;
+    while (k > 0 && p1.t - b.pts[k].t < 0.25) k--;
+    const p0 = b.pts[k], dt = p1.t - p0.t;
+    if (!(dt > 0.004) || dt > 0.6) return velTmp;
+    velTmp.vx = (p1.x - p0.x) / dt; velTmp.vy = (p1.y - p0.y) / dt; velTmp.v = Math.hypot(velTmp.vx, velTmp.vy);
+    velTmp.age = age; velTmp.ok = true;
+    return velTmp;
+  }
   // Cursor lead (display only; cutting uses the real points): the tracker answers a moment after the camera took the
-  // picture, so the cursor is drawn ahead along the hand's latest movement: at most LEAD_MAX seconds of it (less if the
+  // picture, so the cursor is drawn ahead along the hand's movement: at most LEAD_MAX seconds of it (less if the
   // picture is newer), nothing when the hand moves slowly, never more than 12% of the screen's short side.
   const leadTmp = { x: 0, y: 0 };
-  function cursorLead(h, t) {
+  function cursorLead(vel) {
     leadTmp.x = 0; leadTmp.y = 0;
-    const b = blades.get(h.bid + 't');
-    if (!b || b.pts.length < 2) return leadTmp;
-    const p1 = b.pts[b.pts.length - 1], p0 = b.pts[b.pts.length - 2], dt = p1.t - p0.t, age = t - p1.t;
-    if (!(dt > 0.004) || dt > 0.35 || !(age >= 0) || age > 0.35) return leadTmp;
-    const vx = (p1.x - p0.x) / dt, vy = (p1.y - p0.y) / dt;
-    const fade = clamp((Math.hypot(vx, vy) - 0.2 * MIN) / (0.4 * MIN), 0, 1);
+    if (!vel.ok) return leadTmp;
+    const fade = clamp((vel.v - 0.2 * MIN) / (0.4 * MIN), 0, 1);
     if (fade <= 0) return leadTmp;
-    const lead = Math.min(LEAD_MAX, age) * fade, cap = 0.12 * MIN;
-    let x = vx * lead, y = vy * lead;
+    const lead = Math.min(LEAD_MAX, vel.age) * fade, cap = 0.12 * MIN;
+    let x = vel.vx * lead, y = vel.vy * lead;
     const d = Math.hypot(x, y);
     if (d > cap) { x *= cap / d; y *= cap / d; }
     leadTmp.x = x; leadTmp.y = y;
     return leadTmp;
+  }
+  // Steady cursor (display only): while the hand is slow, small movements inside this radius are shake, not
+  // movement. It follows the measured shake of the smoothed fingertip (1.5x), between 0.6% and 4% of the screen.
+  function steadyRadius() {
+    const sh = diag.shakeCursor >= 0 ? Math.sqrt(diag.shakeCursor / 1.5) : 0;
+    return clamp(1.5 * sh, 0.006 * MIN, 0.04 * MIN);
   }
   function drawBlades(t, frameDt) {
     ctx.lineCap = 'round'; ctx.lineJoin = 'round';
@@ -2966,8 +3027,17 @@ body.cam-on.cam-hidden:not(.checking) #tint { background: var(--cart); }
       const tau = clamp(detInterval * 0.5, 0.008, 0.05), a = 1 - Math.exp(-Math.max(frameDt, 0.001) / tau);
       for (const h of hands) {
         if (t - h.recv > keep || h.dx === null) continue;
-        const ahead = cursorLead(h, t);
-        h.px = h.sx + ahead.x; h.py = h.sy + ahead.y;
+        const vel = handVel(h, t), ahead = cursorLead(vel);
+        h.lv = vel.ok ? Math.round(vel.v) : -1; // tests: the speed the drawn cursor used
+        let tx = h.sx + ahead.x, ty = h.sy + ahead.y;
+        if (!vel.ok || vel.v < 0.25 * MIN) { // slow or still hand: the cursor stays put until the point moves more than the shake
+          const r = steadyRadius();
+          if (h.hx == null) { h.hx = tx; h.hy = ty; }
+          const ex = tx - h.hx, ey = ty - h.hy, e = Math.hypot(ex, ey);
+          if (e > r) { h.hx += ex * (1 - r / e); h.hy += ey * (1 - r / e); }
+          tx = h.hx; ty = h.hy;
+        } else { h.hx = tx; h.hy = ty; }
+        h.px = tx; h.py = ty;
         h.dx += (h.px - h.dx) * a; h.dy += (h.py - h.dy) * a; // glide between tracker updates
         const b = blades.get(h.bid + 't');
         const hot = !!b && t - b.fastRecv < 0.15, rr = hot ? 16 : 12;
@@ -3162,6 +3232,7 @@ body.cam-on.cam-hidden:not(.checking) #tint { background: var(--cart); }
       speed: () => JSON.parse(JSON.stringify(Object.assign({ now: backendNow() }, speed))),
       chooseBackend: (r) => chooseBackend(r),
       speedTest: () => speedTestAll(),
+      bladePts: (id) => ((blades.get(id) || { pts: [] }).pts.map((q) => [Math.round(q.x), Math.round(q.y), +q.t.toFixed(3)])),
       async feed(img, t) { // run the real hand model on one picture, as if it were the next camera frame at time t
         if (!tracker.ready) return null;
         const r = await tracker.detect(img, nextTs());
@@ -3173,10 +3244,10 @@ body.cam-on.cam-hidden:not(.checking) #tint { background: var(--cart); }
         halves: halves.length, particles: particles.length, splats: splats.length, texts: texts.map((x) => x.text + (x.sub ? ' ' + x.sub : '')), marks: marks.length,
         blades: [...blades.keys()], powers: Object.assign({}, powers), timeScale: timeScale(),
         targets: targets.map((tg) => ({ id: tg.id, x: tg.x, y: tg.y + bobOf(tg), r: tg.r, sliced: tg.sliced, armed: nowS() >= tg.armedAt })),
-        hands: hands.map((h) => ({ id: h.id, sx: h.sx, sy: h.sy, dx: h.dx, dy: h.dy, px: h.px, py: h.py, rx: h.rx, ry: h.ry, age: +(nowS() - h.recv).toFixed(3),
+        hands: hands.map((h) => ({ id: h.id, sx: h.sx, sy: h.sy, dx: h.dx, dy: h.dy, px: h.px, py: h.py, lv: h.lv, rx: h.rx, ry: h.ry, age: +(nowS() - h.recv).toFixed(3),
           pts: Object.fromEntries(CUT_POINTS.map(([suf]) => { const b = blades.get(h.bid + suf), q = b && b.pts[b.pts.length - 1]; return [suf, q ? [Math.round(q.x), Math.round(q.y)] : null]; })) })),
         camOn, camAsleep, camTracks: camStream ? camStream.getVideoTracks().filter((tr) => tr.readyState === 'live').length : 0, delegate: tracker.delegate, trackerKind: tracker.kind, trackerSource, gpuName, detectMs: +detectMs.toFixed(1), fps: +fpsAvg.toFixed(1), trackingDead,
-        slowGpuSwitch, camAsk, numHands: tracker.numHands, expo: { mode: expo.mode, time: expo.time, iso: expo.iso, note: expo.note }, detectCount, detectHist: detectHist.map((x) => +x.toFixed(1)), detInterval: +detInterval.toFixed(3), latencyMs: +latencyMs.toFixed(1),
+        slowGpuSwitch, camAsk, camBase: JSON.parse(JSON.stringify(camBase)), camSizeNote, numHands: tracker.numHands, expo: { mode: expo.mode, time: expo.time, iso: expo.iso, note: expo.note }, detectCount, detectHist: detectHist.map((x) => +x.toFixed(1)), detInterval: +detInterval.toFixed(3), latencyMs: +latencyMs.toFixed(1),
         video: { w: video.videoWidth, h: video.videoHeight }, handsSeenAgo: +(nowS() - handsSeenAt).toFixed(2), luma: +lastLuma.toFixed(1), dark: lightDark,
         stats: Object.assign({}, stats), resultsShown, isNewBest, pending: pendingAction && pendingAction.id,
         best: { classic: bestFor('classic'), arcade: bestFor('arcade'), zen: bestFor('zen') }, blade: progress.blade, ach: Object.keys(progress.ach),

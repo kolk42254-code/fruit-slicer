@@ -80,8 +80,14 @@ hand tracker, sound and music, UI, update, render, main loop, wiring (test hooks
 - **Camera exposure setting** (`expo`, `applyExposure`, `exposureStep`): Auto (default) or Sharp = `exposureMode
   manual`, `exposureTime` 1/120 s (units of 100 µs) with ISO scaled to keep brightness; after each brightness check
   ISO goes up/down first, exposure at most 1/60 s. "Not possible on this camera" when the track has no manual mode.
-- **Cursor lead** (`cursorLead`, display only): the camera cursor is drawn ahead along the last fingertip movement by
-  min(`LEAD_MAX` 80 ms, picture age), faded out below 0.2–0.6 × MIN px/s, capped at 12% of MIN.
+- **Cursor lead** (`cursorLead`, display only): the camera cursor is drawn ahead along the fingertip's movement by
+  min(`LEAD_MAX` 80 ms, picture age), faded out below 0.2–0.6 × MIN px/s, capped at 12% of MIN. The speed (`handVel`)
+  is measured over the last 0.25 s of the stroke, so shake does not look like movement.
+- **Steady cursor** (display only): while that speed is under 0.25 × MIN px/s, the drawn cursor stays put until the
+  smoothed point leaves a circle of `steadyRadius()` (1.5 × measured cursor shake, 0.6–4% of MIN), then follows.
+- **Camera size setting** (`camSize`): Normal (laptops 640×480, phones the camera's own size) or HD (1280×720).
+  `camBase` holds the frame rate + size asked; `camApply()` re-sends them with every exposure change, because
+  `applyConstraints` replaces all constraints.
 - **Curved cut** (`cutCurve`, camera strokes only): besides the straight segment, cuts along a parabola from the last
   point to the new one with the Catmull-Rom slope at the last point (`CURVE_STEPS` pieces). Fruit and power-ups only;
   bombs keep the straight-line rules.
@@ -92,7 +98,8 @@ hand tracker, sound and music, UI, update, render, main loop, wiring (test hooks
 - **Tracking check** (Settings → "Check hand tracking", only from the menu): camera picture + the tracker's raw hand
   skeleton + the smoothed cursor + live numbers (camera size/fps/light, tracker results/s, ms per frame, GPU/CPU,
   thread, skipped frames, delay camera → result, hand size and "sure" score, swipe frames where the hand was lost,
-  longest gap, broken swipes, still-hand shake, one-frame jumps, drawing fps). "Copy report" puts a text report on the
+  longest gap, broken swipes, still-hand shake, one-frame jumps (only from a hand that was not already moving fast, so
+  a quick swipe that turns back is not a jump), average hand size/sure over the check, drawing fps). "Copy report" puts a text report on the
   clipboard (falls back to `execCommand('copy')`, then shows the text to copy by hand). Counters live in `diag`
   (always counted, reset when the screen opens); `checkNumbers()` → `checkLines()` → rows / `buildReport()`.
   The page version comes from `app/package.json` (`__GAME_VERSION__`, filled in by `tools/build.py`).

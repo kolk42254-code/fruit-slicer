@@ -64,6 +64,13 @@ There is no way to see the phone from here, so the game must show its own number
 > frames; equal → 1 hand; if the tracker is under 15 results/s and 2 hands loses fewer frames → 2 hands.
 > **Report reply format (owner):** results/s and ms per frame for GPU, CPU, page GPU; which was picked and why; lost
 > frames Hands 1 vs 2; delay and shake; what changes next and why.
+> **Owner's reports, 6 Nov (build 4f61eff1, phone on the stand ~1 m):** Hands 1: GPU 72 / CPU 102 / page GPU 75 ms
+> → GPU; 9 results/s, 78 ms per frame, delay 89 ms; lost 17 of 239 swipe frames (7%), 3 of 33 swipes broken; shake
+> 25.7 px (cursor 15.7). Hands 2: GPU 68 / CPU 171 / page GPU 126 ms → GPU; 8 results/s, 136 ms, delay 155 ms; lost
+> 6 of 31 (19%), 6 of 24 broken; shake 30.2 (22.8). **Decision: Hands 1 stays the default** (lower share of lost and
+> broken, 43% faster). Camera auto exposure was 58–67 ms at ISO 100 → only 15–16 fps and blurred swipes ("at least
+> 24 fps" had no effect). **Step 3 built:** steady cursor at rest, Camera size Normal/HD, report: average hand size,
+> jumps that ignore swipe turns, percentages. **Next:** owner tests Exposure Sharp and Camera size HD.
 
 1. **Motion blur → hand lost during a fast swipe → no cut.** A small 1/4" f/2.2 selfie sensor needs long exposures
    indoors, so a fast hand becomes a blur and the tracker drops it.
