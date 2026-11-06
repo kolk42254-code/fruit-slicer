@@ -759,24 +759,42 @@ async def exposure_case(p, R):
         first = (await page.evaluate('window.__applied'))[0]['advanced'][0]
         R.check(f'[exposure {video}] Sharp: manual 1/120 s, ISO raised to keep brightness (200 x 1/30 s -> about 800)',
                 first['exposureMode'] == 'manual' and abs(first['exposureTime'] - 1e4 / 120) < 0.01 and 780 <= first['iso'] <= 820, json.dumps(first))
-        await page.wait_for_timeout(8000)
+        await page.wait_for_timeout(9500)
         s = await snap(page)
-        isos = [a['advanced'][0].get('iso') for a in await page.evaluate('window.__applied')]
+        sets = [(a['advanced'][0].get('exposureTime'), a['advanced'][0].get('iso')) for a in await page.evaluate('window.__applied')]
+        times = [round(t, 1) for t, _ in sets]
+        isos = [i for _, i in sets]
+        # the simulated camera's picture never changes, like a phone that ignores ISO (the owner's moto g57 power)
         if video == 'static_one':
-            R.check('[exposure bright] picture too bright: ISO lowered step by step, exposure stays 1/120 s', s['expo']['mode'] == 'manual' and isos[-1] < isos[0] and abs(s['expo']['time'] - 1e4 / 120) < 0.01,
-                    f"ISO {isos}, light {s['luma']}")
+            R.check('[exposure bright] too bright at 1/120 s: ISO lowered once; no effect -> ISO marked ignored, no more changes',
+                    s['expo']['mode'] == 'manual' and times == [83.3, 83.3] and isos == [799, 533] and s['expo']['isoWorks'] is False, f"times {times}, ISO {isos}, light {s['luma']}")
         else:
-            R.check('[exposure dark] picture too dark: ISO raised step by step (up to the maximum)', s['expo']['mode'] == 'manual' and isos[-1] > isos[0] and max(isos) <= 3200,
-                    f"ISO {isos}, light {s['luma']}")
+            R.check('[exposure dark] too dark: longer exposure first, in big steps, never longer than 1/30 s; then ISO tried once; no effect -> "more light needed"',
+                    s['expo']['mode'] == 'manual' and times[:3] == [83.3, 250.0, 333.3] and max(times) <= 333.4 and isos[-1] > isos[0]
+                    and s['expo']['isoWorks'] is False and 'more light' in s['expo']['note'], f"times {times}, ISO {isos}, note {s['expo']['note']!r}")
         await page.evaluate('__FS.check()'); await wait_state(page, 'check')
         rep = await page.evaluate('__FS.report()')
-        R.check(f'[exposure {video}] report shows the exposure', 'Exposure: Sharp 1/120 s' in rep and 'ISO 100-3200' in rep, [l for l in rep.split('\n') if 'xposure' in l][:2])
+        R.check(f'[exposure {video}] report shows the exposure (and that this camera ignores ISO)', re.search(r'Exposure: Sharp 1/\d+ s, ISO \d+ \(ignored by this camera\)', rep) is not None and 'ISO 100-3200' in rep,
+                [l for l in rep.split('\n') if 'xposure' in l][:2])
         await page.evaluate("__FS.setSetting('exposure', 'auto')")
         await page.wait_for_timeout(500)
         s = await snap(page)
         last = (await page.evaluate('window.__applied'))[-1]['advanced'][0]
         R.check(f'[exposure {video}] back to Auto: camera exposure automatic again', s['expo']['mode'] == 'auto' and last == {'exposureMode': 'continuous'}, json.dumps(last))
         await br.close()
+    # proportional steps, with the measured brightness pinned (aim: brightness 100; light ~ exposure^(1/2.2))
+    br = await launch(p, video='static_one')
+    ctx, page = await open_game(br, Net(), 1280, 720, init_js=EXPO_STUB)
+    await start_camera(page)
+    await page.evaluate("__FS.pinLuma(90); __FS.setSetting('exposure', 'sharp')")
+    await page.wait_for_timeout(2000)
+    steps = []
+    for luma in (51, 90, 200):
+        await page.evaluate(f'__FS.pinLuma({luma})')   # checks at once (the next check is 1.5 s later)
+        await page.wait_for_timeout(600)
+        steps.append(round((await snap(page))['expo']['time'], 1))
+    R.check('[exposure] brightness 51 -> 3x longer (one step), 90 -> no change, 200 -> shorter (sharper)', steps == [250.0, 250.0, 100.0], str(steps))
+    await br.close()
     br = await launch(p, video='static_one')
     ctx, page = await open_game(br, Net(), 1280, 720)
     await start_camera(page)
@@ -821,42 +839,13 @@ async def steady_case(p, R):
     log = await page.evaluate(STEADY_JS, [FR_URL, drift, 1 / 9])
     s = await snap(page)
     gap = abs(log[-1][0] - log[-1][1])
-    R.check('[steady] slow move: the cursor follows (stays within 4% of the screen)', gap <= 0.04 * s['MIN'] + 1 and abs(log[-1][1] - log[0][1]) > 100,
+    R.check('[steady] slow move: the cursor follows (stays within 6% of the screen)', gap <= 0.06 * s['MIN'] + 1 and abs(log[-1][1] - log[0][1]) > 100,
             f"gap {gap:.0f} px, cursor moved {abs(log[-1][1] - log[0][1]):.0f} px")
     swipe = [[1, 72 + k * 60, 0] for k in range(6)]                                                        # fast: 120 screen px per result
     log = await page.evaluate(STEADY_JS, [FR_URL, swipe, 1 / 9])
     R.check('[steady] fast swipe: not held back (cursor ahead of the tracked point)', log[-1] and log[-1][1] < log[-1][0] - 5, f"tracked {log[-1][0]:.0f}, cursor {log[-1][1]:.0f}")
     errs = await page.evaluate('window.__FS_ERRORS || []')
     R.check('[steady] no frame errors', not errs, str(errs[:2]))
-    await br.close()
-
-async def camsize_case(p, R):
-    """Settings > Camera size: HD asks for 1280x720 and keeps the frame rate; exposure requests keep the size; Normal goes back."""
-    br = await launch(p, video='static_one')
-    ctx, page = await open_game(br, Net(), 1280, 720, init_js=EXPO_STUB)
-    await start_camera(page)
-    await page.evaluate("__FS.setSetting('camSize', 'hd')"); await page.wait_for_timeout(600)
-    await page.evaluate("__FS.setSetting('exposure', 'sharp')"); await page.wait_for_timeout(600)
-    await page.evaluate("__FS.setSetting('camSize', 'normal')"); await page.wait_for_timeout(600)
-    ap = await page.evaluate('window.__applied')
-    adv = lambda a: (a.get('advanced') or [{}])[0]
-    hd = next((a for a in ap if a.get('width') == {'ideal': 1280} and not a.get('advanced')), {})
-    ex = next((a for a in ap if adv(a).get('exposureMode') == 'manual'), {'advanced': [{}]})
-    nm = ap[-1] if ap else {'advanced': [{}]}
-    R.check('[camera size] HD: asks for 1280x720 and keeps "at least 24 fps"', hd.get('width') == {'ideal': 1280} and hd.get('height') == {'ideal': 720} and hd.get('frameRate') == {'ideal': 30, 'min': 24}, json.dumps(hd))
-    R.check('[camera size] Sharp exposure keeps the HD size and frame rate', ex.get('width') == {'ideal': 1280} and ex.get('frameRate', {}).get('min') == 24 and ex['advanced'][0]['exposureMode'] == 'manual', json.dumps(ex))
-    R.check('[camera size] back to Normal (640x480), Sharp exposure kept', nm.get('width') == {'ideal': 640} and nm.get('height') == {'ideal': 480} and nm['advanced'][0]['exposureMode'] == 'manual', json.dumps(nm))
-    await br.close()
-    br = await launch(p, video='static_one')
-    ctx, page = await open_game(br, Net(), 1280, 720)
-    await start_camera(page)
-    await page.evaluate("__FS.setSetting('camSize', 'hd')")
-    await page.wait_for_timeout(4000)
-    s = await snap(page)
-    rep = await page.evaluate('__FS.check(), __FS.report()')
-    R.check('[camera size] HD on a real (fake) camera: keeps tracking, report names the setting', len(s['hands']) == 1 and not s['camSizeNote'] and 'camera size hd' in rep, f"hands {len(s['hands'])}, note {s['camSizeNote']!r}, video {s['video']}")
-    bad = problems(page, MP_NOISE)
-    R.check('[camera size] console clean', not bad, ' | '.join(bad[:3]))
     await br.close()
 
 
@@ -871,7 +860,6 @@ async def main():
             'lead': lambda: lead_case(p, R),
             'exposure': lambda: exposure_case(p, R),
             'steady': lambda: steady_case(p, R),
-            'camsize': lambda: camsize_case(p, R),
             'portrait': lambda: mapping_case(p, R, 'portrait_one', 412, 915, True),
             'nohand': lambda: nohand_case(p, R),
             'dark': lambda: dark_case(p, R),

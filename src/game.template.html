@@ -496,13 +496,7 @@ body.cam-on.cam-hidden:not(.checking) #tint { background: var(--cart); }
       </div>
       <p class="help">Sharp: shorter exposure, so a fast hand blurs less. Needs good light. Only on cameras that allow it.</p>
     </fieldset>
-    <fieldset class="seg"><legend>Camera size</legend>
-      <div class="opts">
-        <label><input type="radio" name="camSize" id="size-normal" value="normal"><span>Normal</span></label>
-        <label><input type="radio" name="camSize" id="size-hd" value="hd"><span>HD</span></label>
-      </div>
-      <p class="help">HD: a bigger picture, so your hand is bigger and steadier for the tracker. Each frame may take longer.</p>
-    </fieldset>
+
     <div id="check-row" class="check-row">
       <button id="btn-check" class="btn btn-ghost small" type="button">Check hand tracking</button>
       <p class="help">See what the hand tracker sees, with live numbers you can copy and send.</p>
@@ -636,7 +630,7 @@ body.cam-on.cam-hidden:not(.checking) #tint { background: var(--cart); }
   }
 
   // ================================================================ settings & progress (saved on this device)
-  const DEFAULT_SETTINGS = { diff: 'normal', sens: 'normal', cutWith: 'hand', camView: 'show', hands: 1, exposure: 'auto', camSize: 'normal', sfx: 80, music: 50, muted: false };
+  const DEFAULT_SETTINGS = { diff: 'normal', sens: 'normal', cutWith: 'hand', camView: 'show', hands: 1, exposure: 'auto', sfx: 80, music: 50, muted: false };
   function loadSettings() {
     let s = {};
     try { s = JSON.parse(store.get('fruitSlicer.settings', '{}')) || {}; } catch (e) { s = {}; }
@@ -647,7 +641,6 @@ body.cam-on.cam-hidden:not(.checking) #tint { background: var(--cart); }
     if (s.camView === 'show' || s.camView === 'hide') out.camView = s.camView;
     if (s.hands === 1 || s.hands === 2) out.hands = s.hands;
     if (s.exposure === 'auto' || s.exposure === 'sharp') out.exposure = s.exposure;
-    if (s.camSize === 'normal' || s.camSize === 'hd') out.camSize = s.camSize;
     if (isFinite(s.sfx)) out.sfx = clamp(Math.round(s.sfx), 0, 100);
     if (isFinite(s.music)) out.music = clamp(Math.round(s.music), 0, 100);
     if (typeof s.muted === 'boolean') out.muted = s.muted;
@@ -1707,29 +1700,17 @@ body.cam-on.cam-hidden:not(.checking) #tint { background: var(--cart); }
   };
 
   let camOn = false, camStream = null, camStage = 'idle', modelBytes = null, camAsk = '';
-  let camBase = {}, camSizeNow = '', camSizeNote = ''; // frame rate and size asked from the camera (sent again with every change)
-  function camSizeAsk(portrait) { // Normal: laptops 640x480, tall phones the camera's own size (no square crop); HD: 1280x720
-    if (settings.camSize === 'hd') return { width: { ideal: 1280 }, height: { ideal: 720 } };
-    return portrait ? {} : { width: { ideal: 640 }, height: { ideal: 480 } };
-  }
+  let camBase = {}; // frame rate and size asked from the camera (sent again with every change)
   function camApply(advanced) { // a constraints change replaces all of them: keep the frame rate and size every time
     const tr = camStream ? camStream.getVideoTracks()[0] : null;
     if (!tr) return Promise.reject(new Error('no camera'));
     return tr.applyConstraints(advanced ? Object.assign({}, camBase, { advanced: [advanced] }) : Object.assign({}, camBase));
   }
-  async function applyCamSize() { // Settings > Camera size changed while the camera is on
-    camSizeNow = settings.camSize;
-    const s = settings.camSize === 'hd' ? { width: { ideal: 1280 }, height: { ideal: 720 } } : { width: { ideal: 640 }, height: { ideal: 480 } };
-    const old = camBase;
-    camBase = Object.assign({ frameRate: old.frameRate || { ideal: 30 } }, s);
-    try { await camApply(expo.mode === 'manual' ? { exposureMode: 'manual', exposureTime: expo.time, iso: expo.iso || undefined } : null); camSizeNote = ''; }
-    catch (err) { camBase = old; camSizeNote = 'camera refused (' + ((err && err.name) || 'error') + ')'; }
-  }
   let trackerPromise = null, trackerStage = 'idle', trackerProgress = 0, trackerSource = '';
   let lastTs = 0, detectFails = 0, detectMs = 0, detectCount = 0, detectHist = [], slowGpuSwitch = false, cpuFailed = false, gpuName = '';
   let handsSeenAt = -99, trackingDead = false, lastVideoTime = -1, rvfcOn = false, lastRvfcAt = 0, detInterval = 0.05, lastResultAt = 0;
   let hands = [], handSeq = 0, lastRaw = [], feedOnly = false, videoSizeOverride = null, latencyMs = 0;
-  let lightDark = false, lumaAt = 0, lumaLow = 0, lastLuma = -1;
+  let lightDark = false, lumaAt = 0, lumaLow = 0, lastLuma = -1, lumaPin = null;
   const lumaCanvas = document.createElement('canvas'); lumaCanvas.width = 32; lumaCanvas.height = 24;
   let lumaCtx = null;
   function resetDetectStats() { detectFails = 0; detectCount = 0; detectHist = []; detectMs = 0; }
@@ -1968,9 +1949,8 @@ body.cam-on.cam-hidden:not(.checking) #tint { background: var(--cart); }
     }
     // Laptops: ask for a light 640x480 picture. Tall phone screens: take the camera's own size (no square crop).
     // Ask for at least 24 frames per second (some phones drop to 15 indoors); if the camera refuses, ask normally.
-    // Camera size "HD" (Settings): 1280x720, so the hand is bigger for the tracker.
     const portrait = window.innerHeight > window.innerWidth;
-    const size = camSizeAsk(portrait);
+    const size = portrait ? {} : { width: { ideal: 640 }, height: { ideal: 480 } };
     let stream;
     try {
       camBase = Object.assign({ frameRate: { ideal: 30, min: 24 } }, size);
@@ -1983,7 +1963,6 @@ body.cam-on.cam-hidden:not(.checking) #tint { background: var(--cart); }
       stream = await navigator.mediaDevices.getUserMedia({ audio: false, video: Object.assign({ facingMode: 'user' }, camBase) });
       camAsk = 'normal (at least 24 fps refused: ' + ((err && err.name) || 'error') + ')';
     }
-    camSizeNow = settings.camSize;
     camStream = stream;
     video.srcObject = stream;
     video.muted = true;
@@ -2000,12 +1979,15 @@ body.cam-on.cam-hidden:not(.checking) #tint { background: var(--cart); }
     try { video.srcObject = null; } catch (err) { /* ignore */ }
     hands.forEach((h) => endHand(h)); hands = [];
   }
-  // Camera exposure (Settings): "Sharp" asks for a short exposure (1/120 s) so a fast hand blurs less, with more
-  // sensitivity (ISO) to keep the picture about as bright. After each brightness check: too dark -> raise ISO first,
-  // then the exposure (never longer than 1/60 s); too bright -> back toward 1/120 s, then lower ISO.
+  // Camera exposure (Settings): "Sharp" asks for a short exposure (from 1/120 s) so a fast hand blurs less and the
+  // camera can give 30 pictures per second (auto exposure on some phones takes 60 ms, so only 16 per second), with
+  // more sensitivity (ISO) to keep the picture about as bright. Some phones ignore ISO in this mode (the owner's moto
+  // g57 power did: ISO 1550 asked, picture darker), so after each brightness check: too dark -> longer exposure first,
+  // in proportional steps, never longer than 1/30 s (keeps 30 per second); then ISO, but only while a change of ISO
+  // really changes the brightness. Too bright -> shorter exposure first (sharper), then lower ISO.
   // exposureTime is in units of 100 microseconds (W3C Image Capture).
-  const EXP_SHARP = 1e4 / 120, EXP_LONGEST = 1e4 / 60;
-  const expo = { want: '', mode: 'auto', time: 0, iso: 0, note: '', busy: false, caps: null, retried: false };
+  const EXP_SHARP = 1e4 / 120, EXP_LONGEST = 1e4 / 30;
+  const expo = { want: '', mode: 'auto', time: 0, iso: 0, note: '', busy: false, caps: null, retried: false, isoWorks: null, isoTest: null };
   const camTrack = () => (camStream ? camStream.getVideoTracks()[0] : null);
   async function applyExposure() {
     const tr = camTrack();
@@ -2015,6 +1997,7 @@ body.cam-on.cam-hidden:not(.checking) #tint { background: var(--cart); }
     try { caps = (tr.getCapabilities && tr.getCapabilities()) || {}; } catch (e) { caps = {}; }
     const modes = Array.isArray(caps.exposureMode) ? caps.exposureMode : [];
     expo.caps = caps;
+    expo.isoWorks = null; expo.isoTest = null;
     if (settings.exposure !== 'sharp') {
       if (expo.mode === 'manual' && modes.indexOf('continuous') >= 0) { try { await camApply({ exposureMode: 'continuous' }); } catch (e) { /* keep */ } }
       expo.mode = 'auto'; expo.time = 0; expo.iso = 0; expo.note = '';
@@ -2047,21 +2030,26 @@ body.cam-on.cam-hidden:not(.checking) #tint { background: var(--cart); }
   }
   function exposureStep() {
     if (expo.mode !== 'manual' || expo.busy || lastLuma < 0 || !expo.caps || settings.exposure !== 'sharp') return;
+    if (expo.isoTest) { // did the last ISO change change the brightness? (picture brightness is not linear: allow a margin)
+      const d = lastLuma - expo.isoTest.luma;
+      expo.isoWorks = expo.isoTest.up ? d > 4 : d < -4;
+      expo.isoTest = null;
+    }
     const c = expo.caps, tMax = Math.min(c.exposureTime.max, EXP_LONGEST), tMin = Math.max(c.exposureTime.min, EXP_SHARP);
-    const isoMin = c.iso ? c.iso.min : 0, isoMax = c.iso ? c.iso.max : 0;
+    const isoMin = c.iso ? c.iso.min : 0, isoMax = c.iso ? c.iso.max : 0, L = Math.max(lastLuma, 5);
     let time = expo.time, iso = expo.iso;
-    if (lastLuma < 70) {
-      if (iso && iso < isoMax) iso = Math.min(isoMax, Math.round(iso * 1.4));
-      else if (time < tMax) time = Math.min(tMax, time * 1.4);
+    if (L < 80) { // too dark: aim for brightness 100 (camera pictures are gamma-encoded, about light^(1/2.2))
+      if (time < tMax * 0.99) time = Math.min(tMax, time * clamp(Math.pow(100 / L, 2.2), 1.2, 3));
+      else if (iso && iso < isoMax && expo.isoWorks !== false) { expo.isoTest = { luma: lastLuma, up: true }; iso = Math.min(isoMax, Math.round(iso * 1.5)); }
       else { expo.note = 'too dark for Sharp: more light needed'; return; }
-    } else if (lastLuma > 160) {
-      if (time > tMin * 1.02) time = Math.max(tMin, time / 1.4);
-      else if (iso && iso > isoMin) iso = Math.max(isoMin, Math.round(iso / 1.4));
+    } else if (L > 160) {
+      if (time > tMin * 1.01) time = Math.max(tMin, time * clamp(Math.pow(130 / L, 2.2), 0.4, 0.85));
+      else if (iso && iso > isoMin && expo.isoWorks !== false) { expo.isoTest = { luma: lastLuma, up: false }; iso = Math.max(isoMin, Math.round(iso / 1.5)); }
       else return;
     } else { if (expo.note.indexOf('too dark') === 0) expo.note = ''; return; }
     setExposure(time, iso);
   }
-  const expoText = () => (expo.mode === 'manual' ? 'Sharp 1/' + Math.round(1e4 / expo.time) + ' s' + (expo.iso ? ', ISO ' + expo.iso : '') + (expo.note ? ' (' + expo.note + ')' : '')
+  const expoText = () => (expo.mode === 'manual' ? 'Sharp 1/' + Math.round(1e4 / expo.time) + ' s' + (expo.iso ? ', ISO ' + expo.iso + (expo.isoWorks === false ? ' (ignored by this camera)' : '') : '') + (expo.note ? ' (' + expo.note + ')' : '')
     : settings.exposure === 'sharp' ? 'Sharp ' + (expo.note || 'starting') : 'auto');
   // Leaving the app (or the tab for a few seconds) turns the camera off; coming back turns it on again.
   let camSleepTimer = 0, camAsleep = false;
@@ -2313,7 +2301,7 @@ body.cam-on.cam-hidden:not(.checking) #tint { background: var(--cart); }
       const d = lumaCtx.getImageData(0, 0, 32, 24).data;
       let s = 0;
       for (let i = 0; i < d.length; i += 4) s += 0.299 * d[i] + 0.587 * d[i + 1] + 0.114 * d[i + 2];
-      lastLuma = s / (d.length / 4);
+      lastLuma = TEST && lumaPin != null ? lumaPin : s / (d.length / 4);
       lumaLow = lastLuma < 48 ? lumaLow + 1 : 0;
       lightDark = lumaLow >= 2;
       exposureStep();
@@ -2501,7 +2489,7 @@ body.cam-on.cam-hidden:not(.checking) #tint { background: var(--cart); }
   // settings panel
   let settingsFrom = 'menu';
   function syncSettingsForm() {
-    for (const k of ['diff', 'sens', 'cutWith', 'camView', 'hands', 'exposure', 'camSize']) {
+    for (const k of ['diff', 'sens', 'cutWith', 'camView', 'hands', 'exposure']) {
       const r = document.querySelector('input[name="' + k + '"][value="' + settings[k] + '"]');
       if (r) r.checked = true;
     }
@@ -2529,7 +2517,6 @@ body.cam-on.cam-hidden:not(.checking) #tint { background: var(--cart); }
     document.body.classList.toggle('cam-hidden', settings.camView === 'hide');
     if (tracker.ready && tracker.numHands !== settings.hands) tracker.setHands(settings.hands);
     if (camStream && expo.want !== settings.exposure) applyExposure().catch(() => {});
-    if (camStream && camSizeNow !== settings.camSize) applyCamSize().catch(() => {});
     applyVolumes();
     setMutedUI();
     Music.update();
@@ -2692,7 +2679,7 @@ body.cam-on.cam-hidden:not(.checking) #tint { background: var(--cart); }
         !hs.length || N.hands.some((x) => x.size < SMALL_HAND) || (!!N.handAvg && N.handAvg.size < SMALL_HAND)],
       swipe: [N.swipes + ' swipes · lost ' + N.swipeLost + ' of ' + N.swipeFrames + ' frames (' + pct(lostPct) + ') · longest gap ' + r0(N.gapMs) + ' ms · ' + N.broken + ' of ' + N.swipes + ' broken',
         lostPct > 20 || N.broken > 0],
-      shake: [N.shakeRaw == null ? 'hold your hand still to measure' : 'shake ' + N.shakeRaw.toFixed(1) + ' px (cursor ' + N.shakeCursor.toFixed(1) + ' px) · ' + N.jumps + ' jumps', N.jumps > 0],
+      shake: [N.shakeRaw == null ? 'hold your hand still to measure' : 'shake ' + N.shakeRaw.toFixed(1) + ' px (cursor ' + N.shakeCursor.toFixed(1) + ' px, held within ' + r0(steadyRadius()) + ' px) · ' + N.jumps + ' jumps', N.jumps > 0],
       scr: [N.screen.w + '×' + N.screen.h + ' px ×' + (+N.screen.dpr.toFixed(2)) + ' · drawing ' + r0(N.screen.fps) + ' fps', false]
     };
   }
@@ -2738,7 +2725,7 @@ body.cam-on.cam-hidden:not(.checking) #tint { background: var(--cart); }
       'Swipes: ' + L.swipe[0] + ' (frames = tracker results while the fingertip moved fast)',
       'Steadiness (still hand, fingertip): ' + L.shake[0],
       'Screen: ' + L.scr[0],
-      'Settings: difficulty ' + N.settings.diff + ', cut sensitivity ' + N.settings.sens + ', cut with ' + N.settings.cutWith + ', hands ' + N.settings.hands + ', exposure ' + N.settings.exposure + ', camera size ' + N.settings.camSize + (camSizeNote ? ' (' + camSizeNote + ')' : '') + ', camera picture ' + N.settings.camView
+      'Settings: difficulty ' + N.settings.diff + ', cut sensitivity ' + N.settings.sens + ', cut with ' + N.settings.cutWith + ', hands ' + N.settings.hands + ', exposure ' + N.settings.exposure + ', camera picture ' + N.settings.camView
     ].join('\n');
   }
   function copyByCommand(text) { // older way, for when the clipboard API is missing or refused
@@ -2994,10 +2981,10 @@ body.cam-on.cam-hidden:not(.checking) #tint { background: var(--cart); }
     return leadTmp;
   }
   // Steady cursor (display only): while the hand is slow, small movements inside this radius are shake, not
-  // movement. It follows the measured shake of the smoothed fingertip (1.5x), between 0.6% and 4% of the screen.
+  // movement. It follows the measured shake of the smoothed fingertip (1.5x), between 0.6% and 6% of the screen.
   function steadyRadius() {
     const sh = diag.shakeCursor >= 0 ? Math.sqrt(diag.shakeCursor / 1.5) : 0;
-    return clamp(1.5 * sh, 0.006 * MIN, 0.04 * MIN);
+    return clamp(1.5 * sh, 0.006 * MIN, 0.06 * MIN);
   }
   function drawBlades(t, frameDt) {
     ctx.lineCap = 'round'; ctx.lineJoin = 'round';
@@ -3232,6 +3219,7 @@ body.cam-on.cam-hidden:not(.checking) #tint { background: var(--cart); }
       speed: () => JSON.parse(JSON.stringify(Object.assign({ now: backendNow() }, speed))),
       chooseBackend: (r) => chooseBackend(r),
       speedTest: () => speedTestAll(),
+      pinLuma: (v) => { lumaPin = v; lumaAt = -9; },
       bladePts: (id) => ((blades.get(id) || { pts: [] }).pts.map((q) => [Math.round(q.x), Math.round(q.y), +q.t.toFixed(3)])),
       async feed(img, t) { // run the real hand model on one picture, as if it were the next camera frame at time t
         if (!tracker.ready) return null;
@@ -3247,7 +3235,7 @@ body.cam-on.cam-hidden:not(.checking) #tint { background: var(--cart); }
         hands: hands.map((h) => ({ id: h.id, sx: h.sx, sy: h.sy, dx: h.dx, dy: h.dy, px: h.px, py: h.py, lv: h.lv, rx: h.rx, ry: h.ry, age: +(nowS() - h.recv).toFixed(3),
           pts: Object.fromEntries(CUT_POINTS.map(([suf]) => { const b = blades.get(h.bid + suf), q = b && b.pts[b.pts.length - 1]; return [suf, q ? [Math.round(q.x), Math.round(q.y)] : null]; })) })),
         camOn, camAsleep, camTracks: camStream ? camStream.getVideoTracks().filter((tr) => tr.readyState === 'live').length : 0, delegate: tracker.delegate, trackerKind: tracker.kind, trackerSource, gpuName, detectMs: +detectMs.toFixed(1), fps: +fpsAvg.toFixed(1), trackingDead,
-        slowGpuSwitch, camAsk, camBase: JSON.parse(JSON.stringify(camBase)), camSizeNote, numHands: tracker.numHands, expo: { mode: expo.mode, time: expo.time, iso: expo.iso, note: expo.note }, detectCount, detectHist: detectHist.map((x) => +x.toFixed(1)), detInterval: +detInterval.toFixed(3), latencyMs: +latencyMs.toFixed(1),
+        slowGpuSwitch, camAsk, camBase: JSON.parse(JSON.stringify(camBase)), numHands: tracker.numHands, expo: { mode: expo.mode, time: expo.time, iso: expo.iso, note: expo.note, isoWorks: expo.isoWorks }, detectCount, detectHist: detectHist.map((x) => +x.toFixed(1)), detInterval: +detInterval.toFixed(3), latencyMs: +latencyMs.toFixed(1),
         video: { w: video.videoWidth, h: video.videoHeight }, handsSeenAgo: +(nowS() - handsSeenAt).toFixed(2), luma: +lastLuma.toFixed(1), dark: lightDark,
         stats: Object.assign({}, stats), resultsShown, isNewBest, pending: pendingAction && pendingAction.id,
         best: { classic: bestFor('classic'), arcade: bestFor('arcade'), zen: bestFor('zen') }, blade: progress.blade, ach: Object.keys(progress.ach),

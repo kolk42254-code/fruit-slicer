@@ -89,7 +89,7 @@ async def suite(width, height, mobile, R):
         # ---------------------------------------------------------------- settings panel (default values, blocking cuts)
         await page.click('#btn-settings')
         s = await snap(page)
-        R.check(f'[{dev}] Settings opens with saved values', s['ui']['settings'] and await page.is_checked('#diff-normal') and await page.is_checked('#sens-normal') and await page.is_checked('#cut-hand') and await page.is_checked('#cam-show') and await page.is_checked('#hands-1') and await page.is_checked('#exp-auto') and await page.is_checked('#size-normal'))
+        R.check(f'[{dev}] Settings opens with saved values', s['ui']['settings'] and await page.is_checked('#diff-normal') and await page.is_checked('#sens-normal') and await page.is_checked('#cut-hand') and await page.is_checked('#cam-show') and await page.is_checked('#hands-1') and await page.is_checked('#exp-auto'))
         a = tg['arcade']
         await swipe_through(page, a['x'], a['y'], half=a['r'] * 2)
         await tick(page, 0.6)

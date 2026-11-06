@@ -71,6 +71,12 @@ There is no way to see the phone from here, so the game must show its own number
 > broken, 43% faster). Camera auto exposure was 58–67 ms at ISO 100 → only 15–16 fps and blurred swipes ("at least
 > 24 fps" had no effect). **Step 3 built:** steady cursor at rest, Camera size Normal/HD, report: average hand size,
 > jumps that ignore swipe turns, percentages. **Next:** owner tests Exposure Sharp and Camera size HD.
+> **Owner's report, 6 Nov 10:39 (build d3482e38; Hands 2, Sharp, HD):** camera 30 fps (Sharp works for speed),
+> lost 1 of 39 swipe frames (3%, vs 19% with Hands 2 + Auto), but the picture got darker (light 60): the phone
+> ignores ISO in manual mode (ISO 1550 asked), so Sharp stopped at 1/60 s too dark, and shake rose to 69.6 px. HD
+> kept 480×640; average hand size 27% (not small). **Step 4 built:** Sharp lengthens the exposure first (up to 1/30
+> s, keeps 30 fps) and stops changing ISO when it has no effect; HD removed; steady cursor up to 6% of the screen.
+> **Next:** owner tests Hands 1 + Sharp. If it keeps 30 fps, few lost frames and normal shake, make Sharp the default.
 
 1. **Motion blur → hand lost during a fast swipe → no cut.** A small 1/4" f/2.2 selfie sensor needs long exposures
    indoors, so a fast hand becomes a blur and the tracker drops it.

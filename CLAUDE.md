@@ -78,16 +78,19 @@ hand tracker, sound and music, UI, update, render, main loop, wiring (test hooks
 - **Camera request:** `frameRate {ideal 30, min 24}`; if refused (not a permission/no-camera error), asks again
   without `min` (`camAsk` says which).
 - **Camera exposure setting** (`expo`, `applyExposure`, `exposureStep`): Auto (default) or Sharp = `exposureMode
-  manual`, `exposureTime` 1/120 s (units of 100 µs) with ISO scaled to keep brightness; after each brightness check
-  ISO goes up/down first, exposure at most 1/60 s. "Not possible on this camera" when the track has no manual mode.
+  manual`, starting at `exposureTime` 1/120 s (units of 100 µs) with ISO scaled to keep brightness. After each
+  brightness check (aim 100): too dark → longer exposure first in proportional steps (light ≈ exposure^(1/2.2)), never
+  longer than 1/30 s (keeps 30 fps); then ISO, but only while an ISO change really changes the brightness
+  (`isoWorks`; the owner's phone ignores ISO in manual mode). Too bright → shorter exposure first, then lower ISO.
+  "Not possible on this camera" when the track has no manual mode. Tests pin the brightness with `__FS.pinLuma(v)`.
 - **Cursor lead** (`cursorLead`, display only): the camera cursor is drawn ahead along the fingertip's movement by
   min(`LEAD_MAX` 80 ms, picture age), faded out below 0.2–0.6 × MIN px/s, capped at 12% of MIN. The speed (`handVel`)
   is measured over the last 0.25 s of the stroke, so shake does not look like movement.
 - **Steady cursor** (display only): while that speed is under 0.25 × MIN px/s, the drawn cursor stays put until the
-  smoothed point leaves a circle of `steadyRadius()` (1.5 × measured cursor shake, 0.6–4% of MIN), then follows.
-- **Camera size setting** (`camSize`): Normal (laptops 640×480, phones the camera's own size) or HD (1280×720).
-  `camBase` holds the frame rate + size asked; `camApply()` re-sends them with every exposure change, because
-  `applyConstraints` replaces all constraints.
+  smoothed point leaves a circle of `steadyRadius()` (1.5 × measured cursor shake, 0.6–6% of MIN), then follows.
+- `camBase` holds the frame rate + size asked from the camera; `camApply()` re-sends them with every exposure change,
+  because `applyConstraints` replaces all constraints. (An HD camera size setting was tried and removed: the owner's
+  phone kept 480×640, and the hand was already 27% of the picture.)
 - **Curved cut** (`cutCurve`, camera strokes only): besides the straight segment, cuts along a parabola from the last
   point to the new one with the Catmull-Rom slope at the last point (`CURVE_STEPS` pieces). Fruit and power-ups only;
   bombs keep the straight-line rules.
